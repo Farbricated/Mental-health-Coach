@@ -1,7 +1,15 @@
 """
-🚀 ULTIMATE MENTAL HEALTH AI CHATBOT - PROFESSIONAL EDITION V2.0 🚀
+🚀 ULTIMATE MENTAL HEALTH AI CHATBOT - PROFESSIONAL EDITION V2.1 🚀
 33+ FEATURES | NLP-Powered | Therapeutic Frameworks | Privacy-First
 Multi-Modal AI | Advanced Analytics | Conversation Memory | Groq Integration
+
+ENHANCED VERSION V2.1:
+- Smarter crisis detection (reduced false positives)
+- Intelligent fallback responses (helpful even without AI)
+- Topic detection & smart redirects
+- Context-aware affirmations
+- Better wellness scoring
+- Improved intensity calculation
 """
 
 import requests
@@ -72,30 +80,47 @@ class Config:
         "grief": "I recently lost someone close to me and I don't know how to process it."
     }
 
-    # Crisis Detection
-    CRISIS_KEYWORDS = [
-        "suicide", "kill myself", "end it all", "want to die", "harm myself",
-        "no point living", "can't go on", "better off dead", "jump off", "overdose",
-        "end my life", "not worth living", "give up on life"
-    ]
+    # Enhanced Crisis Detection - Three-tier system
+    CRISIS_KEYWORDS = {
+        "critical": ["suicide", "kill myself", "end it all", "want to die", "end my life", 
+                     "better off dead", "not worth living", "give up on life"],
+        "high": ["harm myself", "self harm", "cut myself", "hurt myself", "overdose", 
+                 "can't go on"],
+        "moderate": ["hopeless", "no hope", "want to disappear"]
+    }
 
-    # Affirmations
-    AFFIRMATIONS = [
-        "You are stronger than you think.",
-        "This moment is temporary; it will pass.",
-        "Your feelings are valid and important.",
-        "You deserve kindness, especially from yourself.",
-        "Progress over perfection.",
-        "You have overcome challenges before.",
-        "Your worth is not defined by your productivity.",
-        "It's okay to ask for help.",
-        "You are enough, just as you are.",
-        "One step at a time is still progress.",
-    ]
+    # Context-Aware Affirmations
+    AFFIRMATIONS = {
+        "anxious": [
+            "Your anxiety is valid, but it doesn't define you.",
+            "One breath at a time. You've got this.",
+            "Anxiety is your body trying to protect you. Thank it, then let it go.",
+        ],
+        "sad": [
+            "This feeling is temporary. You won't always feel this way.",
+            "You are worthy of love and compassion, especially your own.",
+            "It's okay to not be okay. Healing takes time.",
+        ],
+        "stressed": [
+            "You can only do what you can do, and that's enough.",
+            "Progress over perfection. One step at a time.",
+            "It's okay to take breaks. Rest is productive too.",
+        ],
+        "angry": [
+            "Your anger is valid. It's telling you something important.",
+            "Feeling angry doesn't make you a bad person.",
+            "You can be angry and still respond wisely.",
+        ],
+        "default": [
+            "You are stronger than you think.",
+            "Your feelings are valid and important.",
+            "One step at a time is still progress.",
+        ]
+    }
 
-# ========================= FEATURE 1-5: ADVANCED NLP SENTIMENT ANALYSIS =========================
+# ========================= ENHANCED SENTIMENT ANALYSIS =========================
 class NLPEnhancedSentimentAnalyzer:
-    """Professional-grade NLP sentiment analysis with multiple engines"""
+    """Professional-grade NLP sentiment analysis with topic detection"""
 
     def __init__(self):
         self.transformer_classifier = None
@@ -113,17 +138,19 @@ class NLPEnhancedSentimentAnalyzer:
                 print("✅ Transformer model loaded")
             except Exception as e:
                 print(f"⚠️  Transformer load failed: {e}")
+                self.transformer_classifier = None
         
         # Initialize spaCy if available
         if SPACY_AVAILABLE:
             try:
                 self.nlp = spacy.load("en_core_web_sm")
                 print("✅ spaCy loaded")
-            except:
-                print("⚠️  spaCy model not found. Run: python -m spacy download en_core_web_sm")
+            except Exception as e:
+                print(f"⚠️  spaCy model not found: {e}")
+                self.nlp = None
 
     def analyze(self, text: str) -> Dict:
-        """Comprehensive multi-engine sentiment analysis"""
+        """Comprehensive multi-engine sentiment analysis with topic detection"""
         
         result = {
             "polarity": 0.0,
@@ -135,13 +162,24 @@ class NLPEnhancedSentimentAnalyzer:
             "all_emotions": [],
             "entities": [],
             "key_phrases": [],
-            "word_breakdown": {}
+            "word_breakdown": {},
+            "is_question": False,
+            "is_greeting": False,
+            "topic": "general"
         }
+        
+        if not text or not text.strip():
+            return result
+        
+        # Detect questions and greetings
+        result["is_question"] = self._is_question(text)
+        result["is_greeting"] = self._is_greeting(text)
+        result["topic"] = self._detect_topic(text)
         
         # 1. Transformer-based emotion detection (if available)
         if self.transformer_classifier:
             try:
-                emotions = self.transformer_classifier(text)[0]
+                emotions = self.transformer_classifier(text[:512])[0]
                 if emotions:
                     primary = max(emotions, key=lambda x: x['score'])
                     result["emotion"] = primary['label']
@@ -175,7 +213,7 @@ class NLPEnhancedSentimentAnalyzer:
         # 3. spaCy entity & phrase extraction (if available)
         if self.nlp:
             try:
-                doc = self.nlp(text)
+                doc = self.nlp(text[:1000])
                 result["entities"] = [(ent.text, ent.label_) for ent in doc.ents]
                 result["key_phrases"] = [chunk.text for chunk in doc.noun_chunks][:5]
             except Exception as e:
@@ -184,31 +222,79 @@ class NLPEnhancedSentimentAnalyzer:
         # 4. Fallback: Pattern-based analysis (always available)
         pattern_result = self._pattern_based_analysis(text)
         
-        # Merge results (use transformer if available, otherwise pattern-based)
+        # Merge results
         if not self.transformer_classifier:
             result.update(pattern_result)
         else:
-            # Use pattern-based word breakdown
             result["word_breakdown"] = pattern_result["word_breakdown"]
-            # If transformer didn't detect emotion, use pattern-based
             if result["emotion"] == "neutral" and pattern_result["emotion"] != "neutral":
                 result["emotion"] = pattern_result["emotion"]
+                result["intensity"] = pattern_result["intensity"]
         
         return result
 
+    def _is_question(self, text: str) -> bool:
+        """Detect if text is a question"""
+        question_words = ["what", "why", "how", "when", "where", "who", "which", 
+                         "can you", "could you", "would you", "do you", "is there"]
+        text_lower = text.lower().strip()
+        return "?" in text or any(text_lower.startswith(qw) for qw in question_words)
+
+    def _is_greeting(self, text: str) -> bool:
+        """Detect if text is a greeting"""
+        greetings = ["hello", "hi", "hey", "good morning", "good afternoon", 
+                    "good evening", "greetings", "howdy"]
+        text_lower = text.lower().strip()
+        # Check if starts with greeting or is just a greeting
+        return any(text_lower.startswith(g) for g in greetings) or text_lower in greetings
+
+    def _detect_topic(self, text: str) -> str:
+        """Detect the topic of the text"""
+        text_lower = text.lower()
+        
+        topics = {
+            "mental_health": ["anxiety", "depression", "stress", "panic", "therapy", 
+                            "counseling", "mental health", "feeling", "emotion", "mood"],
+            "work": ["work", "job", "career", "boss", "colleague", "office", 
+                    "project", "deadline", "meeting"],
+            "relationships": ["relationship", "partner", "spouse", "boyfriend", 
+                            "girlfriend", "marriage", "divorce", "breakup"],
+            "family": ["family", "parent", "mother", "father", "sibling", 
+                      "child", "son", "daughter"],
+            "health": ["health", "sick", "pain", "doctor", "hospital", "medication"],
+            "sleep": ["sleep", "insomnia", "tired", "exhausted", "rest", "fatigue"],
+            "education": ["school", "college", "university", "study", "exam", "grade"],
+            "finances": ["money", "financial", "debt", "bills", "savings", "budget"],
+            "general_inquiry": ["how", "what", "why", "explain", "tell me", "insight", 
+                              "information", "about", "understand", "thinking", "philosophy"]
+        }
+        
+        # Count topic matches
+        topic_scores = {}
+        for topic, keywords in topics.items():
+            score = sum(1 for keyword in keywords if keyword in text_lower)
+            if score > 0:
+                topic_scores[topic] = score
+        
+        # Return topic with highest score, or general if none
+        if topic_scores:
+            return max(topic_scores, key=topic_scores.get)
+        
+        return "general"
+
     def _pattern_based_analysis(self, text: str) -> Dict:
-        """Enhanced pattern-based analysis with contextual phrases"""
+        """Enhanced pattern-based analysis with better intensity calculation"""
         
         EMOTION_PATTERNS = {
             "anxious": {
                 "keywords": ["anxious", "nervous", "worried", "panic", "scared", "afraid", 
-                            "overwhelmed", "tense", "uneasy", "restless", "fear"],
+                            "overwhelmed", "tense", "uneasy", "restless", "fear", "racing"],
                 "phrases": ["can't stop thinking", "what if", "heart racing", "can't breathe",
-                           "feel like", "going to happen", "so worried", "keep worrying"]
+                           "feel like", "going to happen", "so worried", "keep worrying", "won't stop"]
             },
             "sad": {
                 "keywords": ["sad", "depressed", "hopeless", "empty", "numb", "alone",
-                            "worthless", "cry", "grief", "loss", "miserable"],
+                            "worthless", "cry", "grief", "loss", "miserable", "down"],
                 "phrases": ["don't want to", "no point", "can't enjoy", "lost interest",
                            "feel nothing", "want to disappear", "feel empty", "so alone"]
             },
@@ -220,7 +306,7 @@ class NLPEnhancedSentimentAnalyzer:
             },
             "stressed": {
                 "keywords": ["stressed", "pressure", "deadline", "burden", "exhausted",
-                            "burned out", "too much", "swamped"],
+                            "burned out", "too much", "swamped", "responsibilities"],
                 "phrases": ["can't handle", "too many", "no time", "falling apart",
                            "can't cope", "breaking point"]
             }
@@ -258,7 +344,10 @@ class NLPEnhancedSentimentAnalyzer:
         total = pos_score + neg_score
         
         polarity = (pos_score - neg_score) / max(total, 1) if total > 0 else 0.0
-        intensity = min(100, sum(emotion_scores.values()) * 10)
+        
+        # Improved intensity calculation
+        max_emotion_score = max(emotion_scores.values()) if emotion_scores else 0
+        intensity = min(100, max_emotion_score * 12)  # Better scaling
         
         if polarity > 0.5:
             label = "very_positive"
@@ -283,52 +372,74 @@ class NLPEnhancedSentimentAnalyzer:
             }
         }
 
-# ========================= FEATURE 6-10: CRISIS DETECTION =========================
+# ========================= ENHANCED CRISIS DETECTION =========================
 class EnhancedCrisisDetectionSystem:
-    """Multi-factor crisis detection with therapy framework integration"""
+    """Multi-factor crisis detection with reduced false positives"""
 
     def __init__(self):
         self.crisis_history = []
 
     def detect(self, text: str, sentiment: Dict) -> Dict:
-        """Advanced crisis detection using multiple signals"""
+        """Advanced crisis detection - requires multiple strong signals"""
+        
+        if not text or not text.strip():
+            return {
+                "is_crisis": False,
+                "severity": "none",
+                "keywords": [],
+                "response": "",
+                "score": 0
+            }
         
         text_lower = text.lower()
-        detected_keywords = [kw for kw in Config.CRISIS_KEYWORDS if kw in text_lower]
         
-        # Multi-factor scoring
+        # Check for crisis keywords by severity
+        critical_keywords = [kw for kw in Config.CRISIS_KEYWORDS["critical"] if kw in text_lower]
+        high_keywords = [kw for kw in Config.CRISIS_KEYWORDS["high"] if kw in text_lower]
+        moderate_keywords = [kw for kw in Config.CRISIS_KEYWORDS["moderate"] if kw in text_lower]
+        
+        all_keywords = critical_keywords + high_keywords + moderate_keywords
+        
+        # Multi-factor scoring (STRICTER THRESHOLDS)
         crisis_score = 0
         
-        # Factor 1: Keywords (highest weight)
-        if detected_keywords:
+        # Factor 1: Critical keywords (immediate crisis)
+        if critical_keywords:
+            crisis_score += 70
+        
+        # Factor 2: High severity keywords
+        if high_keywords:
             crisis_score += 40
         
-        # Factor 2: Sentiment polarity
-        if sentiment['polarity'] < -0.7:
-            crisis_score += 30
-        elif sentiment['polarity'] < -0.5:
-            crisis_score += 20
+        # Factor 3: Moderate keywords (REDUCED WEIGHT)
+        if moderate_keywords:
+            crisis_score += 15  # Reduced from 20
         
-        # Factor 3: Specific emotions
-        if sentiment['emotion'] in ['sad', 'hopeless']:
+        # Factor 4: Sentiment polarity (STRICTER - only very negative counts)
+        polarity = sentiment.get('polarity', 0)
+        if polarity < -0.8:  # Stricter threshold
             crisis_score += 15
+        elif polarity < -0.6:
+            crisis_score += 8
         
-        # Factor 4: Intensity
-        if sentiment['intensity'] > 80:
-            crisis_score += 10
+        # Factor 5: Specific emotions (ONLY for sad/hopeless)
+        emotion = sentiment.get('emotion', 'neutral')
+        if emotion in ['sad', 'hopeless'] and crisis_score > 0:
+            crisis_score += 8  # Only add if other signals present
         
-        # Factor 5: Subjectivity (if available)
-        if sentiment.get('subjectivity', 0) > 0.8:
-            crisis_score += 5
+        # Factor 6: Intensity (ONLY if very high AND other signals)
+        intensity = sentiment.get('intensity', 0)
+        if intensity > 90 and crisis_score > 0:
+            crisis_score += 7
         
-        # Determine severity
-        if crisis_score >= 70:
+        # Determine severity (STRICTER THRESHOLDS)
+        if crisis_score >= 70 or critical_keywords:
             severity = "critical"
             is_crisis = True
-        elif crisis_score >= 50:
+        elif crisis_score >= 50 or high_keywords:
             severity = "high"
             is_crisis = True
-        elif crisis_score >= 30:
+        elif crisis_score >= 40:  # Increased from 30
             severity = "moderate"
             is_crisis = True
         else:
@@ -341,14 +452,14 @@ class EnhancedCrisisDetectionSystem:
             self.crisis_history.append({
                 "timestamp": datetime.now(),
                 "severity": severity,
-                "keywords": detected_keywords,
+                "keywords": all_keywords,
                 "score": crisis_score
             })
         
         return {
             "is_crisis": is_crisis,
             "severity": severity,
-            "keywords": detected_keywords,
+            "keywords": all_keywords,
             "response": crisis_response,
             "score": crisis_score
         }
@@ -396,7 +507,191 @@ You matter, and help is available.""",
         }
         return responses.get(severity, "")
 
-# ========================= FEATURE 11-13: THERAPY FRAMEWORK =========================
+# ========================= FALLBACK RESPONSE GENERATOR =========================
+class FallbackResponseGenerator:
+    """Generate helpful responses when AI is not available"""
+    
+    @staticmethod
+    def generate(sentiment: Dict, crisis: Dict) -> str:
+        """Generate contextual response based on sentiment and topic"""
+        
+        emotion = sentiment.get('emotion', 'neutral')
+        intensity = sentiment.get('intensity', 0)
+        topic = sentiment.get('topic', 'general')
+        is_question = sentiment.get('is_question', False)
+        is_greeting = sentiment.get('is_greeting', False)
+        
+        # Handle greetings
+        if is_greeting:
+            return """Hello! 👋 I'm here to support your mental health and emotional wellbeing.
+
+**What I Can Do (Even Without AI):**
+• Analyze your emotional state
+• Suggest evidence-based coping strategies
+• Provide therapeutic techniques (CBT, DBT, Mindfulness)
+• Track your mental health progress
+• Detect crisis situations and provide resources
+
+**For Enhanced Support:**
+• Set up LM Studio for privacy-first AI responses (see LM_STUDIO_GUIDE.md)
+• Or add a Groq API key for cloud-powered conversations
+
+**What's on your mind today?**"""
+        
+        # Handle general questions about non-mental health topics
+        if is_question and topic == "general_inquiry":
+            return """I notice you're asking a general question. I'm specifically designed to support **mental health and emotional wellbeing**.
+
+**I Can Help With:**
+• Understanding emotions (anxiety, stress, sadness, anger)
+• Managing mental health challenges
+• Learning coping strategies and therapeutic techniques
+• Tracking your emotional patterns
+• Crisis support and professional resources
+
+**For General Questions:**
+I'd recommend using a general AI assistant like:
+• ChatGPT (openai.com)
+• Claude (claude.ai)
+• Google Gemini
+
+**Is there anything related to your mental health or emotional wellbeing I can help with?**"""
+        
+        # Crisis response
+        if crisis.get('is_crisis'):
+            return crisis.get('response', '')
+        
+        # Emotion-specific responses
+        intensity_text = " at a high level" if intensity > 70 else ""
+        
+        responses = {
+            "anxious": f"""I can sense you're experiencing anxiety{intensity_text}. Here's guidance tailored to your situation:
+
+**🫁 Immediate Relief:**
+1. **5-4-3-2-1 Grounding** - Name 5 things you see, 4 you touch, 3 you hear, 2 you smell, 1 you taste
+2. **Box Breathing** - Inhale 4 counts, hold 4, exhale 4, hold 4 (repeat 5 times)
+
+**🧠 Understanding Anxiety:**
+Anxiety is your nervous system trying to protect you from perceived threats. Sometimes it overreacts to situations that aren't actually dangerous. Your feelings are valid, but the thoughts may not be facts.
+
+**💡 What Helps:**
+• Challenge anxious thoughts: "Is this realistic? What's the evidence?"
+• Progressive muscle relaxation (see therapeutic interventions above)
+• Limit caffeine and get physical movement
+
+**📞 When to Seek Help:**
+If anxiety is persistent, interfering with daily life, or causing physical symptoms, please consider talking to a mental health professional.
+
+**🤖 For Personalized AI Support:**
+Set up LM Studio (local & private) or add a Groq API key for conversational guidance.""",
+
+            "sad": f"""I recognize you're feeling down{intensity_text}. Your feelings are valid, and I'm here to help:
+
+**💙 First, Know This:**
+Sadness is a normal human emotion. It's okay to not be okay sometimes. You're not weak for feeling this way.
+
+**🎯 Behavioral Activation (What Helps):**
+Depression tells you to isolate and do nothing, which makes it worse. Break the cycle:
+1. Do ONE tiny thing (5-10 minutes): make tea, step outside, text a friend
+2. Notice if mood improves even slightly
+3. Build from there
+
+**🗣️ Connection Matters:**
+• Reach out to someone you trust
+• You don't have to explain everything - just connect
+• Even a brief conversation helps
+
+**⚠️ Important:**
+If sadness persists for weeks, please see a mental health professional. Depression is treatable - you don't have to suffer alone.
+
+**📊 Track Your Patterns:**
+Use 'wellness' and 'calendar' commands to identify triggers and progress.""",
+
+            "stressed": f"""I can see you're dealing with stress{intensity_text}. Let's break this down into manageable steps:
+
+**📋 Priority Triage (RIGHT NOW):**
+1. **Brain Dump** - Write down EVERYTHING on your mind
+2. **Circle Top 3** - What are the most urgent/important items?
+3. **One Thing** - Focus only on #1 for the next hour
+
+**⏸️ Stress Relief Techniques:**
+• **Physical Reset** - 10 jumping jacks or 5-minute walk
+• **4-7-8 Breathing** - Inhale 4, hold 7, exhale 8 (repeat 4 times)
+• **Time-Boxing** - Work 25 min, break 5 min (Pomodoro)
+
+**🚫 Boundary Setting:**
+You cannot pour from an empty cup. It's okay to:
+• Say no to non-essentials
+• Ask for help
+• Take breaks (rest IS productive)
+
+**🎯 Remember:**
+You can only do what you can do. That has to be enough, because it's all that exists.
+
+**📈 Track Triggers:**
+Use 'patterns' command to identify stress sources over time.""",
+
+            "angry": f"""Anger is a valid emotion with important information. Let's work with it constructively:
+
+**🔍 What Is Your Anger Telling You?**
+Anger usually signals an unmet need:
+• Need for **respect**? (Someone dismissed you)
+• Need for **fairness**? (Something feels unjust)
+• Need for **control/safety**? (Feeling powerless)
+• Need for **boundaries**? (Being taken advantage of)
+
+**❄️ Cool Down First (TIPP Skills):**
+1. **Temperature** - Splash cold water on face or hold ice cube
+2. **Intense Exercise** - Run in place, do push-ups
+3. **Paced Breathing** - 4 in, 7 hold, 8 out
+4. **Paired Muscle Relaxation** - Tense then relax muscle groups
+
+**🗣️ Healthy Expression:**
+After cooling down:
+• Use "I feel... when... because..." statements
+• Journal about it
+• Talk to someone you trust
+
+**⚖️ Is This Proportionate?**
+If anger is disproportionate to the situation, try "opposite action" (DBT): 
+• Angry at someone who doesn't deserve it? → Be kind to them
+• Angry behavior not helping? → Do the opposite temporarily
+
+**💼 Long-term:**
+Persistent anger may indicate deeper issues. Consider professional support.""",
+
+            "neutral": """I notice your message doesn't show strong emotions. This could mean:
+
+**✅ Possibilities:**
+• You're in a stable emotional state (that's great!)
+• You're asking a general/philosophical question
+• You're not sure how to express what you're feeling
+• You're checking out the chatbot
+
+**🤔 If You're Unsure How You Feel:**
+That's completely normal! Try:
+1. **Body Check** - Notice tension, heart rate, breathing
+2. **Ask Yourself** - "What do I need right now?"
+3. **Emotion Wheel** - Sometimes labeling helps
+
+**💬 If You Have Questions:**
+• **Mental health related** - I'm here for you!
+• **General topics** - I'd recommend ChatGPT or Claude
+• **About me** - Type 'help' to see what I can do
+
+**📊 My Specialties:**
+• Emotional awareness and regulation
+• Coping skills for anxiety, stress, sadness, anger
+• Therapeutic techniques (CBT, DBT, Mindfulness)
+• Mental health progress tracking
+• Crisis support and resources
+
+**What would you like to talk about?**"""
+        }
+        
+        return responses.get(emotion, responses["neutral"])
+
+# ========================= THERAPY FRAMEWORK =========================
 class TherapyFramework:
     """CBT, DBT, and Mindfulness-based interventions"""
     
@@ -539,6 +834,7 @@ Repeat 4 times. Activates relaxation response."""
                     "name": technique["name"],
                     "description": technique["description"]
                 })
+                break
         
         # Emotion-based suggestions
         if emotion == "anxious" and intensity > 60:
@@ -555,7 +851,7 @@ Repeat 4 times. Activates relaxation response."""
                 "description": TherapyFramework.CBT_TECHNIQUES["behavioral_activation"]["description"]
             })
         
-        if intensity > 75:  # High distress
+        if intensity > 75:
             suggested_techniques.append({
                 "type": "DBT",
                 "name": TherapyFramework.DBT_SKILLS["distress_tolerance"]["name"],
@@ -563,31 +859,28 @@ Repeat 4 times. Activates relaxation response."""
             })
         
         return {
-            "suggested_techniques": suggested_techniques[:2],  # Limit to 2 to avoid overwhelm
+            "suggested_techniques": suggested_techniques[:2],
             "count": len(suggested_techniques)
         }
 
-# ========================= FEATURE 14: SMART COPING STRATEGIES =========================
+# ========================= COPING STRATEGIES =========================
 class EnhancedCopingStrategyGenerator:
-    """Context-aware coping strategies with therapy integration"""
+    """Context-aware coping strategies"""
 
     @staticmethod
     def generate(emotion: str, intensity: float, text: str = "") -> List[str]:
         """Generate personalized evidence-based coping strategies"""
         
-        strategies = []
-        
-        # Emotion-specific strategies
         emotion_strategies = {
             "anxious": [
                 "🫁 Box breathing: Inhale 4, hold 4, exhale 4, hold 4 (repeat 5 times)",
                 "🧘 5-4-3-2-1 grounding: Name 5 things you see, 4 you touch, 3 you hear, 2 you smell, 1 you taste",
-                "💭 Challenge anxious thoughts: 'Is this thought realistic? What's the evidence?'",
+                "💭 Challenge anxious thoughts: 'Is this realistic? What's the evidence?'",
                 "🚶 Progressive muscle relaxation: Tense then relax each muscle group",
-                "📝 Write down worries, then schedule 15min 'worry time' for later"
+                "📝 Write down worries, schedule 15min 'worry time' for later"
             ],
             "sad": [
-                "🎯 Behavioral activation: Do ONE small enjoyable activity (10 min walk, favorite song, call friend)",
+                "🎯 Behavioral activation: Do ONE small activity (10 min walk, favorite song, call friend)",
                 "💬 Reach out to someone you trust - connection helps",
                 "🌅 Go outside for 10 minutes - natural light improves mood",
                 "📊 Challenge negative self-talk: 'Would I say this to a friend?'",
@@ -595,41 +888,44 @@ class EnhancedCopingStrategyGenerator:
             ],
             "angry": [
                 "🚶 Physical release: Brisk walk, exercise, or stretching",
-                "🧊 TIPP: Hold ice cube or splash cold water on face (calms nervous system)",
-                "🗣️ Express it safely: Journal, punch pillow, or talk to someone",
-                "⏸️ Take a break from the situation if possible",
-                "💭 Identify what need isn't being met (respect, fairness, control?)"
+                "🧊 TIPP: Hold ice cube or splash cold water on face",
+                "🗣️ Express safely: Journal, punch pillow, or talk to someone",
+                "⏸️ Take a break from the situation",
+                "💭 Identify unmet need (respect, fairness, control?)"
             ],
             "stressed": [
-                "📋 Brain dump: Write EVERYTHING you need to do, then prioritize top 3",
-                "⏰ Time-block: Work for 25 min, break for 5 (Pomodoro)",
+                "📋 Brain dump: Write EVERYTHING, then prioritize top 3",
+                "⏰ Time-block: Work 25 min, break 5 (Pomodoro)",
                 "🚫 Say no to one non-essential thing today",
-                "🫁 4-7-8 breathing: Breathe in 4, hold 7, out 8 (repeat 4 times)",
-                "🎯 Ask: 'What's the ONE thing that would make the biggest difference?'"
+                "🫁 4-7-8 breathing: In 4, hold 7, out 8 (repeat 4x)",
+                "🎯 Ask: 'What's the ONE thing that would make biggest difference?'"
+            ],
+            "neutral": [
+                "🧘 Practice mindfulness: 5 min deep breathing",
+                "🚶 Take short walk to clear your mind",
+                "💭 Reflect on what you're grateful for",
+                "📝 Journal about thoughts and feelings",
+                "🎯 Set one small achievable goal"
             ]
         }
         
-        # Get emotion-specific strategies
-        strategies = emotion_strategies.get(emotion, emotion_strategies["stressed"])
+        strategies = emotion_strategies.get(emotion, emotion_strategies["neutral"])
         
-        # Intensity-based selection
         if intensity > 75:
-            # High intensity: prioritize crisis management
             return strategies[:3]
         else:
-            # Moderate: give variety
             return random.sample(strategies, min(3, len(strategies)))
 
-# ========================= FEATURE 15-17: PROGRESS TRACKING =========================
+# ========================= PROGRESS TRACKING =========================
 class EnhancedProgressTracker:
-    """Advanced analytics and tracking with conversation history"""
+    """Advanced analytics and tracking"""
 
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._init_db()
 
     def _init_db(self):
-        """Initialize database with enhanced schema"""
+        """Initialize database"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -664,7 +960,7 @@ class EnhancedProgressTracker:
     def log_session(self, scenario: str, sentiment: Dict, crisis: Dict, 
                    model: str, response_time: float, conversation_turns: int = 0,
                    therapy_technique: str = ""):
-        """Log comprehensive session data"""
+        """Log session data"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -712,7 +1008,6 @@ class EnhancedProgressTracker:
 
             results = cursor.fetchall()
             
-            # Get average metrics
             cursor.execute("""
                 SELECT 
                     AVG(sentiment_polarity),
@@ -750,7 +1045,7 @@ class EnhancedProgressTracker:
             }
 
     def get_emotion_patterns(self) -> Dict:
-        """Identify emotional patterns over time"""
+        """Identify emotional patterns"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -769,93 +1064,93 @@ class EnhancedProgressTracker:
                 "most_common_emotions": [(e[0], e[1]) for e in emotions[:5]],
                 "total_tracked": sum(e[1] for e in emotions)
             }
-        except:
+        except Exception as e:
+            print(f"⚠️  Pattern analysis error: {e}")
             return {"most_common_emotions": [], "total_tracked": 0}
 
-# ========================= FEATURE 18-22: ENHANCED AI MODES =========================
+# ========================= AI MODES =========================
 class EnhancedLMStudioMode:
-    """LM Studio with system prompts, conversation memory, and dynamic parameters"""
+    """LM Studio with system prompts and conversation memory"""
     
     SYSTEM_PROMPTS = {
         "anxious": """You are a specialized anxiety support assistant trained in CBT and grounding techniques.
 
 Your approach:
-1. Validate their anxiety without judgment ("It's completely normal to feel anxious about...")
-2. Offer 2-3 evidence-based grounding techniques (5-4-3-2-1, box breathing, progressive muscle relaxation)
+1. Validate their anxiety without judgment
+2. Offer 2-3 evidence-based grounding techniques
 3. Use calming, reassuring language
 4. Suggest thought-challenging if catastrophizing detected
-5. Encourage professional help if anxiety is severe or persistent
+5. Encourage professional help if severe
 6. Keep responses 200-300 words, warm and supportive
 
-Never diagnose anxiety disorders or prescribe medication. Focus on immediate coping skills.""",
+Never diagnose or prescribe medication.""",
 
-        "sad": """You are a depression support specialist using behavioral activation and self-compassion techniques.
+        "sad": """You are a depression support specialist using behavioral activation and self-compassion.
 
 Your approach:
 1. Acknowledge the weight of their feelings with deep empathy
-2. Gently suggest ONE small, achievable action (behavioral activation)
-3. Challenge negative self-talk compassionately ("Would you say this to a friend?")
-4. Instill hope while being realistic about the difficulty
+2. Gently suggest ONE small, achievable action
+3. Challenge negative self-talk compassionately
+4. Instill hope while being realistic
 5. Emphasize their worth is not tied to productivity
 6. Keep responses 200-300 words, empathetic and hopeful
 
-Never diagnose depression or prescribe medication. Strongly encourage professional help for persistent sadness.""",
+Never diagnose or prescribe medication.""",
 
-        "stressed": """You are a stress management coach focusing on practical, actionable solutions.
+        "stressed": """You are a stress management coach focusing on practical solutions.
 
 Your approach:
-1. Validate their stress as a normal response to demands
-2. Help break down overwhelming tasks into concrete steps
-3. Teach prioritization: urgent vs important
-4. Offer quick stress-relief techniques (breathing, time-blocking)
-5. Suggest boundary-setting if overcommitment detected
+1. Validate their stress as normal
+2. Help break down overwhelming tasks
+3. Teach prioritization
+4. Offer quick stress-relief techniques
+5. Suggest boundary-setting if needed
 6. Keep responses 200-300 words, practical and solution-focused
 
-Never minimize their stress. Balance empathy with actionable guidance.""",
+Balance empathy with actionable guidance.""",
 
-        "angry": """You are an anger management specialist using emotion regulation techniques.
+        "angry": """You are an anger management specialist using emotion regulation.
 
 Your approach:
-1. Validate that anger is a normal emotion with important information
-2. Help identify the underlying need (respect, fairness, control, safety)
-3. Suggest healthy expression methods (physical activity, journaling, communication)
-4. Teach "opposite action" if anger is disproportionate
+1. Validate anger as normal with important information
+2. Help identify underlying need
+3. Suggest healthy expression methods
+4. Teach "opposite action" if disproportionate
 5. Encourage cooling-off before important conversations
 6. Keep responses 200-300 words, calm and non-judgmental
 
-Never tell them to "just calm down." Respect anger as valid while teaching regulation.""",
+Never tell them to "just calm down.""",
 
-        "crisis": """You are an emergency mental health support assistant. This is a CRISIS situation.
+        "crisis": """You are an emergency mental health support assistant. CRISIS situation.
 
 IMMEDIATE PROTOCOL:
-1. Provide crisis helplines FIRST AND PROMINENTLY:
+1. Provide crisis helplines FIRST:
    🇮🇳 INDIA - AASRA: +91-9820466726 | iCall: +91-96540 22000
    🇺🇸 USA - 988 Suicide & Crisis Lifeline
-2. Affirm their life has value: "You matter. Your life matters."
-3. Offer immediate grounding technique (5-4-3-2-1, ice cube, call someone)
-4. STRONGLY urge calling helpline or going to emergency room NOW
-5. Keep responses 150-200 words, DIRECT and focused on immediate safety
+2. Affirm their life has value
+3. Offer immediate grounding technique
+4. STRONGLY urge calling helpline or going to ER NOW
+5. Keep responses 150-200 words, DIRECT and focused on safety
 
-This is an emergency. Professional intervention is CRITICAL. Be clear, supportive, urgent.""",
+This is an emergency. Professional intervention is CRITICAL.""",
 
         "default": """You are a compassionate mental health support companion trained in evidence-based techniques.
 
 Core principles:
-1. EMPATHY FIRST - Always validate feelings before offering solutions
-2. SAFETY - Immediately recognize crisis language (suicide, self-harm, "no point living")
-3. EVIDENCE-BASED - Use CBT, mindfulness, behavioral activation, grounding techniques
-4. NON-DIAGNOSTIC - Never diagnose mental health conditions or prescribe medication
-5. PROFESSIONAL BOUNDARIES - Encourage professional therapy for persistent/severe concerns
+1. EMPATHY FIRST - Validate feelings before offering solutions
+2. SAFETY - Recognize crisis language immediately
+3. EVIDENCE-BASED - Use CBT, mindfulness, behavioral activation, grounding
+4. NON-DIAGNOSTIC - Never diagnose or prescribe
+5. PROFESSIONAL BOUNDARIES - Encourage therapy for persistent concerns
 
 Response structure:
-- Validate feelings: "I hear that you're feeling [emotion]. That's [acknowledgment]."
-- Ask clarifying question if needed (ONE question max)
-- Offer 2-3 specific, actionable coping strategies
-- End with encouragement and reminder of their strength
-- Keep responses warm, professional, helpful (200-300 words)
+- Validate feelings
+- Ask ONE clarifying question if needed
+- Offer 2-3 specific, actionable strategies
+- End with encouragement
+- Keep warm, professional, helpful (200-300 words)
 
-Crisis keywords to watch: suicide, kill myself, self-harm, end it all, no point living
-→ If detected, IMMEDIATELY provide helplines and encourage professional help.
+Crisis keywords → IMMEDIATELY provide helplines.
 
 You are a supportive companion, not a replacement for therapy."""
     }
@@ -863,7 +1158,7 @@ You are a supportive companion, not a replacement for therapy."""
     def __init__(self):
         self.available = self._check()
         self.conversation_history = []
-        self.max_history = 6  # Last 3 exchanges
+        self.max_history = 6
         
         if self.available:
             print("🔵 LM Studio: ✅ Ready (Enhanced Mode)")
@@ -892,52 +1187,29 @@ You are a supportive companion, not a replacement for therapy."""
         """Adjust parameters based on emotional state"""
         
         if is_crisis:
-            # Crisis: focused, direct, clear
-            return {
-                "temperature": 0.4,
-                "max_tokens": 400,
-                "top_p": 0.8
-            }
+            return {"temperature": 0.4, "max_tokens": 400, "top_p": 0.8}
         elif intensity > 75:
-            # High intensity: detailed support
-            return {
-                "temperature": 0.5,
-                "max_tokens": 600,
-                "top_p": 0.85
-            }
+            return {"temperature": 0.5, "max_tokens": 600, "top_p": 0.85}
         elif sentiment_polarity < -0.5:
-            # Very negative: balanced response
-            return {
-                "temperature": 0.6,
-                "max_tokens": 512,
-                "top_p": 0.85
-            }
+            return {"temperature": 0.6, "max_tokens": 512, "top_p": 0.85}
         else:
-            # General support: default
-            return {
-                "temperature": Config.TEMPERATURE,
-                "max_tokens": Config.MAX_TOKENS,
-                "top_p": Config.TOP_P
-            }
+            return {"temperature": Config.TEMPERATURE, "max_tokens": Config.MAX_TOKENS, "top_p": Config.TOP_P}
 
     def generate(self, prompt: str, emotion: str = "default",
                 sentiment_polarity: float = 0.0, intensity: float = 50.0,
                 is_crisis: bool = False, use_history: bool = True) -> Tuple[str, float]:
-        """Generate response with context and dynamic parameters"""
+        """Generate response with context"""
         
         if not self.available:
             return "LM Studio unavailable. Please start LM Studio server.", 0
 
-        # Select appropriate system prompt
         if is_crisis:
             system_prompt = self.SYSTEM_PROMPTS["crisis"]
         else:
             system_prompt = self.SYSTEM_PROMPTS.get(emotion, self.SYSTEM_PROMPTS["default"])
 
-        # Get dynamic configuration
         config = self._get_dynamic_config(emotion, sentiment_polarity, intensity, is_crisis)
 
-        # Build messages with history
         messages = [{"role": "system", "content": system_prompt}]
         
         if use_history and self.conversation_history:
@@ -961,22 +1233,24 @@ You are a supportive companion, not a replacement for therapy."""
             elapsed = (time.time() - start) * 1000
 
             if response.status_code == 200:
-                assistant_message = response.json()["choices"][0]["message"]["content"].strip()
-                
-                # Store conversation history
-                if use_history:
-                    self.conversation_history.append({"role": "user", "content": prompt})
-                    self.conversation_history.append({"role": "assistant", "content": assistant_message})
+                data = response.json()
+                if 'choices' in data and len(data['choices']) > 0:
+                    assistant_message = data["choices"][0]["message"]["content"].strip()
                     
-                    # Trim to max_history
-                    if len(self.conversation_history) > self.max_history:
-                        self.conversation_history = self.conversation_history[-self.max_history:]
-                
-                return assistant_message, elapsed
+                    if use_history:
+                        self.conversation_history.append({"role": "user", "content": prompt})
+                        self.conversation_history.append({"role": "assistant", "content": assistant_message})
+                        
+                        if len(self.conversation_history) > self.max_history:
+                            self.conversation_history = self.conversation_history[-self.max_history:]
+                    
+                    return assistant_message, elapsed
+                else:
+                    return "LM Studio returned invalid response", elapsed
             else:
                 return f"LM Studio error {response.status_code}", elapsed
         except requests.exceptions.Timeout:
-            return "LM Studio timeout (response took >60s)", 0
+            return "LM Studio timeout (>60s)", 60000
         except Exception as e:
             return f"LM Studio error: {str(e)}", 0
 
@@ -994,7 +1268,7 @@ You are a supportive companion, not a replacement for therapy."""
         }
 
 class GroqMode:
-    """Groq cloud API integration (replaces Gemini) - Llama 3.1 70B for mental health"""
+    """Groq cloud API integration"""
     
     def __init__(self):
         self.available = self._check()
@@ -1004,8 +1278,8 @@ class GroqMode:
             print("⚡ Groq: ⚠️  Not configured (set GROQ_API_KEY)")
 
     def _check(self) -> bool:
-        """Check if Groq API is configured and working"""
-        if Config.GROQ_API_KEY == "your-groq-api-key-here":
+        """Check if Groq API is configured"""
+        if Config.GROQ_API_KEY == "your-groq-api-key-here" or not Config.GROQ_API_KEY:
             return False
         
         try:
@@ -1027,12 +1301,11 @@ class GroqMode:
             return False
 
     def generate(self, prompt: str, emotion: str = "default") -> Tuple[str, float]:
-        """Generate response using Groq (OpenAI-compatible API)"""
+        """Generate response using Groq"""
         
         if not self.available:
             return "Groq not available. Set GROQ_API_KEY environment variable.", 0
 
-        # Use same system prompts as LM Studio
         system_prompt = EnhancedLMStudioMode.SYSTEM_PROMPTS.get(
             emotion, 
             EnhancedLMStudioMode.SYSTEM_PROMPTS["default"]
@@ -1056,22 +1329,26 @@ class GroqMode:
                     "max_tokens": Config.MAX_TOKENS,
                     "top_p": Config.TOP_P
                 },
-                timeout=30  # Groq is faster, so shorter timeout
+                timeout=30
             )
             elapsed = (time.time() - start) * 1000
 
             if response.status_code == 200:
-                text = response.json()["choices"][0]["message"]["content"].strip()
-                return text, elapsed
+                data = response.json()
+                if 'choices' in data and len(data['choices']) > 0:
+                    text = data["choices"][0]["message"]["content"].strip()
+                    return text, elapsed
+                else:
+                    return "Groq returned invalid response", elapsed
             else:
-                return f"Groq error {response.status_code}: {response.text}", elapsed
+                return f"Groq error {response.status_code}", elapsed
         except requests.exceptions.Timeout:
-            return "Groq timeout", 0
+            return "Groq timeout", 30000
         except Exception as e:
             return f"Groq error: {str(e)}", 0
 
 class AutoIntelligentMode:
-    """Intelligent routing between Local (LM Studio) and Cloud (Groq)"""
+    """Intelligent routing between Local and Cloud"""
     
     def __init__(self):
         self.lm_studio = EnhancedLMStudioMode()
@@ -1086,19 +1363,14 @@ class AutoIntelligentMode:
     def should_use_cloud(self, text: str, is_crisis: bool = False) -> bool:
         """Decide whether to use cloud AI"""
         
-        # Never use cloud for crisis (privacy)
         if is_crisis:
             return False
         
-        # Use cloud if local not available
         if not self.lm_studio.available and self.groq.available:
             return True
         
-        # Use cloud for complex queries (Groq is fast enough)
         word_count = len(text.split())
         question_count = text.count("?")
-        
-        # Complex query criteria
         is_complex = word_count > 60 or question_count > 2
         
         return is_complex and self.groq.available
@@ -1119,7 +1391,6 @@ class AutoIntelligentMode:
             )
             model = "LM Studio"
         elif self.groq.available:
-            # Fallback to Groq if LM Studio unavailable
             text, elapsed = self.groq.generate(prompt, emotion)
             model = "Groq (fallback)"
         else:
@@ -1127,7 +1398,7 @@ class AutoIntelligentMode:
 
         return text, elapsed, model
 
-# ========================= EXISTING FEATURES (ENHANCED) =========================
+# ========================= FEATURE CLASSES =========================
 class EmotionWheel:
     """Visualize emotional state"""
 
@@ -1212,23 +1483,30 @@ class SessionReplay:
                 for r in results
             ]
             return sessions
-        except:
+        except Exception as e:
+            print(f"⚠️  Session replay error: {e}")
             return []
 
 class WellnessScore:
-    """Calculate overall wellness"""
+    """Calculate overall wellness with better logic"""
 
     @staticmethod
     def calculate(trend: Dict) -> Dict:
-        if trend["total_sessions"] == 0:
-            return {"score": 0, "level": "No data", "recommendation": "Start tracking to see your wellness score!"}
+        total_sessions = trend["total_sessions"]
+        
+        # Need minimum 5 sessions for accurate score
+        if total_sessions < 5:
+            return {
+                "score": "Collecting data...",
+                "level": "Building baseline",
+                "recommendation": f"Keep tracking! Need {5 - total_sessions} more sessions for wellness score."
+            }
 
-        # Weighted scoring
         avg_polarity = trend.get("avg_polarity", 0)
         avg_intensity = trend.get("avg_intensity", 50)
         crisis_count = trend.get("crisis_count", 0)
 
-        # Base score from polarity (-1 to +1 → 0 to 100)
+        # Base score from polarity
         base_score = (avg_polarity + 1) * 50
 
         # Penalty for high intensity negative emotions
@@ -1267,7 +1545,6 @@ class ReportExporter:
             cursor.execute("SELECT * FROM sessions ORDER BY timestamp DESC")
             sessions = cursor.fetchall()
             
-            # Get column names
             cursor.execute("PRAGMA table_info(sessions)")
             columns = [col[1] for col in cursor.fetchall()]
             
@@ -1275,7 +1552,7 @@ class ReportExporter:
 
             if format == "csv":
                 filename = f"mental_health_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                with open(filename, 'w', newline='') as f:
+                with open(filename, 'w', newline='', encoding='utf-8') as f:
                     writer = csv.writer(f)
                     writer.writerow(columns)
                     writer.writerows(sessions)
@@ -1284,7 +1561,7 @@ class ReportExporter:
             elif format == "json":
                 filename = f"mental_health_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
                 data = [dict(zip(columns, session)) for session in sessions]
-                with open(filename, 'w') as f:
+                with open(filename, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2)
                 return f"✅ Exported {len(sessions)} sessions to {filename}"
             
@@ -1298,7 +1575,7 @@ class BreathingGuide:
     def guided_breathing(technique: str = "4-7-8", cycles: int = 4):
         print(f"\n🫁 GUIDED BREATHING - {technique.upper()}")
         print("="*50)
-        print("Close your eyes, relax your shoulders, and focus on your breath.\n")
+        print("Close your eyes, relax your shoulders, focus on your breath.\n")
 
         if technique == "4-7-8":
             print("Technique: Inhale (4) → Hold (7) → Exhale (8)")
@@ -1403,15 +1680,15 @@ class AIRecommendations:
         if sessions_count > 10 and sessions_count % 10 == 0:
             recommendations.append(f"🎉 Milestone: {sessions_count} sessions tracked! Great self-awareness!")
 
-        return recommendations[:4]  # Limit to 4 to avoid overwhelm
+        return recommendations[:4]
 
 # ========================= MAIN SYSTEM =========================
 class UltimateHealthCoach:
-    """Complete mental health coaching system - 33+ features"""
+    """Complete mental health coaching system with enhanced features"""
 
     def __init__(self):
         print("\n" + "="*70)
-        print("🚀 ULTIMATE MENTAL HEALTH COACH V2.0 - INITIALIZING 🚀")
+        print("🚀 ULTIMATE MENTAL HEALTH COACH V2.1 - INITIALIZING 🚀")
         print("="*70 + "\n")
 
         # Core engines
@@ -1420,6 +1697,7 @@ class UltimateHealthCoach:
         self.therapy_framework = TherapyFramework()
         self.coping_generator = EnhancedCopingStrategyGenerator()
         self.progress_tracker = EnhancedProgressTracker(Config.DB_PATH)
+        self.fallback_generator = FallbackResponseGenerator()
         
         # AI models
         self.lm_studio = EnhancedLMStudioMode()
@@ -1438,14 +1716,14 @@ class UltimateHealthCoach:
         print("\n✅ All systems initialized!\n")
 
     def comprehensive_analysis(self, scenario_name: str, user_input: str, use_ai: bool = True):
-        """Full analysis with all 33+ features"""
+        """Full analysis with all features"""
 
         print(f"\n{'='*70}")
         print(f"📊 COMPREHENSIVE MENTAL HEALTH ANALYSIS")
         print(f"{'='*70}")
         print(f"📝 Input: {user_input[:100]}{'...' if len(user_input) > 100 else ''}\n")
 
-        # 1. Advanced Sentiment Analysis (NLP-powered)
+        # 1. Advanced Sentiment Analysis
         print("🔍 Analyzing sentiment...")
         sentiment = self.sentiment_analyzer.analyze(user_input)
         
@@ -1456,16 +1734,20 @@ class UltimateHealthCoach:
         if sentiment.get('subjectivity', 0) > 0:
             print(f"   Subjectivity: {sentiment['subjectivity']:.2f}")
         
+        # Show topic if relevant
+        if sentiment['topic'] != 'general':
+            print(f"   Topic: {sentiment['topic']}")
+        
         # Show NLP insights if available
         if sentiment.get('entities'):
-            print(f"   Entities detected: {', '.join([e[0] for e in sentiment['entities'][:3]])}")
+            print(f"   Entities: {', '.join([e[0] for e in sentiment['entities'][:3]])}")
         if sentiment.get('key_phrases'):
             print(f"   Key phrases: {', '.join(sentiment['key_phrases'][:3])}")
 
         # 2. Emotion Wheel Visualization
         EmotionWheel.display(sentiment['emotion'], sentiment['intensity'], sentiment.get('confidence', 0))
 
-        # 3. Crisis Detection (Multi-factor)
+        # 3. Crisis Detection
         crisis = self.crisis_detector.detect(user_input, sentiment)
         
         print(f"\n🚨 SAFETY CHECK:")
@@ -1502,43 +1784,28 @@ class UltimateHealthCoach:
         for i, strategy in enumerate(strategies, 1):
             print(f"   {i}. {strategy}")
 
-        # 6. AI Responses (if enabled)
-        model_used = "None"
+        # 6. AI or Fallback Response
+        model_used = "Fallback"
         response_time = 0
         
-        if use_ai:
-            print(f"\n🤖 AI SUPPORT:")
-            
-            # Try auto mode first (smart routing)
-            if self.auto.available:
-                response, elapsed, model = self.auto.generate(
-                    user_input,
-                    sentiment['emotion'],
-                    sentiment['polarity'],
-                    sentiment['intensity'],
-                    crisis['is_crisis']
-                )
-                print(f"\n   🟠 Auto Mode → {model} ({elapsed:.0f}ms):")
-                print(f"   {response[:300]}{'...' if len(response) > 300 else ''}")
-                model_used = model
-                response_time = elapsed
-            
-            # Show LM Studio response if available
-            elif self.lm_studio.available:
-                response, elapsed = self.lm_studio.generate(
-                    user_input,
-                    sentiment['emotion'],
-                    sentiment['polarity'],
-                    sentiment['intensity'],
-                    crisis['is_crisis']
-                )
-                print(f"\n   🔵 LM Studio ({elapsed:.0f}ms):")
-                print(f"   {response[:300]}{'...' if len(response) > 300 else ''}")
-                model_used = "LM Studio"
-                response_time = elapsed
-            
-            else:
-                print("   ⚠️  No AI models available")
+        print(f"\n🤖 SUPPORT & GUIDANCE:")
+        
+        if use_ai and self.auto.available:
+            response, elapsed, model = self.auto.generate(
+                user_input,
+                sentiment['emotion'],
+                sentiment['polarity'],
+                sentiment['intensity'],
+                crisis['is_crisis']
+            )
+            print(f"\n   🟠 {model} ({elapsed:.0f}ms):")
+            print(f"   {response[:300]}{'...' if len(response) > 300 else ''}")
+            model_used = model
+            response_time = elapsed
+        else:
+            # Use fallback response
+            fallback_response = self.fallback_generator.generate(sentiment, crisis)
+            print(f"\n{fallback_response}")
 
         # 7. AI Recommendations
         recommendations = self.ai_recommendations.get_recommendations(
@@ -1561,8 +1828,9 @@ class UltimateHealthCoach:
         print(f"\n📊 WELLNESS SCORE: {wellness['score']}/100 ({wellness['level']})")
         print(f"   {wellness.get('recommendation', '')}")
 
-        # 9. Affirmation
-        affirmation = random.choice(Config.AFFIRMATIONS)
+        # 9. Context-Aware Affirmation
+        affirmations = Config.AFFIRMATIONS.get(sentiment['emotion'], Config.AFFIRMATIONS["default"])
+        affirmation = random.choice(affirmations)
         print(f"\n✨ TODAY'S AFFIRMATION:")
         print(f"   \"{affirmation}\"")
 
@@ -1589,10 +1857,17 @@ class UltimateHealthCoach:
         """Main interactive menu"""
         
         print("\n" + "="*70)
-        print("💬 ULTIMATE MENTAL HEALTH COACH V2.0")
+        print("💬 ULTIMATE MENTAL HEALTH COACH V2.1")
         print("="*70)
         print("""
-🌟 33+ PROFESSIONAL FEATURES:
+🌟 ENHANCED FEATURES:
+
+✨ NEW IN V2.1:
+   • Smarter crisis detection (fewer false positives)
+   • Intelligent fallback responses (helpful without AI)
+   • Topic detection & smart redirects
+   • Context-aware affirmations
+   • Better wellness scoring
 
 🧠 CORE AI:
    1. NLP-Powered Sentiment Analysis (Transformer + TextBlob + spaCy)
@@ -1664,12 +1939,13 @@ Type a command to begin...
                     trend = self.progress_tracker.get_mood_trend(7)
                     wellness = self.wellness_score.calculate(trend)
                     print(f"\n📊 YOUR WELLNESS SCORE:")
-                    print(f"   Score: {wellness['score']}/100")
+                    print(f"   Score: {wellness['score']}")
                     print(f"   Level: {wellness['level']}")
                     print(f"   Recommendation: {wellness.get('recommendation', '')}")
-                    print(f"\n   Based on {trend['total_sessions']} sessions in last 7 days")
-                    print(f"   Average polarity: {trend.get('avg_polarity', 0):.2f}")
-                    print(f"   Average intensity: {trend.get('avg_intensity', 0):.1f}%")
+                    if isinstance(wellness['score'], int):
+                        print(f"\n   Based on {trend['total_sessions']} sessions in last 7 days")
+                        print(f"   Average polarity: {trend.get('avg_polarity', 0):.2f}")
+                        print(f"   Average intensity: {trend.get('avg_intensity', 0):.1f}%")
 
                 elif command == "calendar":
                     print(self.mood_calendar.get_mood_calendar(Config.DB_PATH, 7))

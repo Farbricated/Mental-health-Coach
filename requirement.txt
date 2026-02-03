@@ -1,32 +1,39 @@
 # Mental Health AI Chatbot V2.0 - Python Dependencies
 
-## Core Dependencies (Required)
+# ========================= CORE DEPENDENCIES (REQUIRED) =========================
+# HTTP requests for API calls
 requests>=2.31.0
 
-## Advanced NLP Features (Optional - Recommended)
-# Uncomment the ones you want to install:
+# ========================= ADVANCED NLP FEATURES (OPTIONAL - RECOMMENDED) =========================
 
 # Transformer-based emotion detection (most accurate)
+# Uncomment to install:
 # transformers>=4.30.0
 # torch>=2.0.0
 
 # Sentiment analysis
+# Uncomment to install:
 # textblob>=0.17.1
 
 # Advanced NLP (entity recognition, key phrases)
+# Uncomment to install:
 # spacy>=3.5.0
 
-## Installation Instructions:
+# ========================= INSTALLATION INSTRUCTIONS =========================
 
-# 1. Minimal install (just LM Studio support):
+# Option 1: Minimal install (just LM Studio support)
 #    pip install requests
 
-# 2. Install with NLP features (recommended):
+# Option 2: Install with NLP features (recommended)
 #    pip install requests transformers torch textblob spacy
 #    python -m spacy download en_core_web_sm
 
-# 3. If you get errors with torch, try CPU-only version:
+# Option 3: If you get errors with torch, try CPU-only version
 #    pip install requests transformers torch --index-url https://download.pytorch.org/whl/cpu textblob spacy
 #    python -m spacy download en_core_web_sm
 
-# Note: sqlite3 is built-in with Python, no installation needed
+# ========================= NOTES =========================
+# - sqlite3 is built-in with Python 3, no installation needed
+# - csv, json, datetime, collections are all built-in
+# - All NLP dependencies are optional - the chatbot works without them
+# - The chatbot will use fallback pattern-based analysis if NLP libraries aren't installed
