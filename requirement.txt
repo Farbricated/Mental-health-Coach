@@ -1,39 +1,6 @@
-# Mental Health AI Chatbot V2.0 - Python Dependencies
-
-# ========================= CORE DEPENDENCIES (REQUIRED) =========================
-# HTTP requests for API calls
 requests>=2.31.0
-
-# ========================= ADVANCED NLP FEATURES (OPTIONAL - RECOMMENDED) =========================
-
-# Transformer-based emotion detection (most accurate)
-# Uncomment to install:
-# transformers>=4.30.0
-# torch>=2.0.0
-
-# Sentiment analysis
-# Uncomment to install:
-# textblob>=0.17.1
-
-# Advanced NLP (entity recognition, key phrases)
-# Uncomment to install:
-# spacy>=3.5.0
-
-# ========================= INSTALLATION INSTRUCTIONS =========================
-
-# Option 1: Minimal install (just LM Studio support)
-#    pip install requests
-
-# Option 2: Install with NLP features (recommended)
-#    pip install requests transformers torch textblob spacy
-#    python -m spacy download en_core_web_sm
-
-# Option 3: If you get errors with torch, try CPU-only version
-#    pip install requests transformers torch --index-url https://download.pytorch.org/whl/cpu textblob spacy
-#    python -m spacy download en_core_web_sm
-
-# ========================= NOTES =========================
-# - sqlite3 is built-in with Python 3, no installation needed
-# - csv, json, datetime, collections are all built-in
-# - All NLP dependencies are optional - the chatbot works without them
-# - The chatbot will use fallback pattern-based analysis if NLP libraries aren't installed
+python-dotenv>=1.0.0
+textblob>=0.17.1
+spacy>=3.5.0
+transformers>=4.30.0
+torch>=2.0.0
