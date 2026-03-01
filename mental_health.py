@@ -124,19 +124,61 @@ class LMStudioModelManager:
     # ── Connection ────────────────────────────────────────────────────────────
 
     def _connect(self) -> bool:
+        """
+        Connect to LM Studio server.
+
+        LM Studio's 'Just-in-time model loading' means /v1/models returns an
+        empty list until the first actual request triggers a load. So:
+        1. Ping /v1/models — a 200 means the SERVER is up (even if list is empty)
+        2. If list is empty, send a tiny warm-up chat to trigger JIT loading
+        3. Re-fetch models after warm-up
+        """
         try:
-            resp = requests.get(Config.LM_STUDIO_MODELS_URL, timeout=4)
-            if resp.status_code == 200:
-                models = resp.json().get("data", [])
-                self.available_models = models
-                self.is_connected     = True
-                if models:
-                    self.selected_model = models[0]["id"]
-                return True
+            resp = requests.get(Config.LM_STUDIO_MODELS_URL, timeout=5)
+            if resp.status_code != 200:
+                self.is_connected = False
+                return False
+
+            # Server is reachable
+            self.is_connected = True
+            models = resp.json().get("data", [])
+
+            # JIT mode: model list is empty until first request fires the load
+            if not models:
+                print("  ⏳  LM Studio connected — warming up JIT model load...")
+                self._jit_warmup()
+                try:
+                    resp2  = requests.get(Config.LM_STUDIO_MODELS_URL, timeout=5)
+                    models = resp2.json().get("data", []) if resp2.status_code == 200 else []
+                except Exception:
+                    pass
+
+            self.available_models = models
+            if models and not self.selected_model:
+                self.selected_model = models[0]["id"]
+
+            return True
+
         except Exception:
             pass
+
         self.is_connected = False
         return False
+
+    def _jit_warmup(self):
+        """Send a 1-token request to trigger LM Studio's Just-in-time model load."""
+        try:
+            requests.post(
+                Config.LM_STUDIO_CHAT_URL,
+                json={
+                    "model":      "llm",
+                    "messages":   [{"role": "user", "content": "hi"}],
+                    "max_tokens": 1,
+                },
+                timeout=60,   # JIT load can take 10-30s on first call
+            )
+        except Exception:
+            pass  # Timeout/error is fine — it still triggers the load
 
     def refresh(self) -> bool:
         return self._connect()
@@ -217,11 +259,14 @@ class LMStudioModelManager:
         max_tokens:  Optional[int]   = None,
     ) -> Tuple[str, float]:
         """Send messages to the selected LM Studio model. Returns (text, ms)."""
-        if not self.is_connected or not self.selected_model:
+        if not self.is_connected:
             return "", 0.0
 
+        # JIT mode: no model selected yet — use "llm" (LM Studio's default JIT id)
+        model = self.selected_model or "llm"
+
         payload = {
-            "model":       self.selected_model,
+            "model":       model,
             "messages":    messages,
             "temperature": temperature if temperature is not None else Config.TEMPERATURE,
             "max_tokens":  max_tokens  if max_tokens  is not None else Config.MAX_TOKENS,
@@ -234,6 +279,9 @@ class LMStudioModelManager:
 
             if resp.status_code == 200:
                 text = resp.json()["choices"][0]["message"]["content"].strip()
+                # If we used JIT "llm" id, try to get the real model name now
+                if not self.selected_model:
+                    self.refresh()
                 return text, ms
 
             return f"[LM Studio HTTP {resp.status_code}]", ms
@@ -248,7 +296,7 @@ class LMStudioModelManager:
         if not self.is_connected:
             return "❌  LM Studio: Offline  (open LM Studio → start server)"
         if not self.available_models:
-            return "⚠️   LM Studio: Connected but no model loaded"
+            return "⚠️   LM Studio: Connected — no model loaded yet (JIT mode active)"
         return f"✅  LM Studio: {self.selected_model}"
 
 
@@ -509,11 +557,12 @@ class IntelligentResponder:
 
     def generate(self, understanding: Dict) -> Tuple[str, str]:
         """Returns (response_text, source_label)."""
-        # 1) Try LM Studio
-        if self.lm.is_connected and self.lm.selected_model:
+        # 1) Try LM Studio (works in JIT mode too — uses "llm" fallback id)
+        if self.lm.is_connected:
             text, ms = self._try_lm_studio(understanding)
             if text:
-                return text, f"LM Studio [{self.lm.selected_model}] ({ms:.0f}ms)"
+                model_label = self.lm.selected_model or "llm (JIT)"
+                return text, f"LM Studio [{model_label}] ({ms:.0f}ms)"
 
         # 2) Try Groq
         if self.groq_ready:
