@@ -1,1182 +1,1307 @@
 """
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                                                                              ║
-║   🌟 MINDFUL PRO - Advanced AI Mental Wellness Companion 🌟                 ║
-║                                                                              ║
-║   • Thinks deeply about context and nuance                                  ║
-║   • Responds like a real therapist friend                                   ║
-║   • Learns your patterns and adapts over time                               ║
-║   • Evidence-based therapeutic interventions (CBT / DBT / Mindfulness)     ║
-║   • LM Studio local AI  +  Groq cloud backup                               ║
-║   • .env file support for API keys                                          ║
-║                                                                              ║
-║   Version: 2.1.0 | Production Ready                                         ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+Mindful Pro v3.0 — Streamlit Web App
+Powered by Groq (llama-3.1-8b-instant)
+
+Run:
+    pip install streamlit plotly requests python-dotenv
+    streamlit run app.py
 """
 
+import streamlit as st
 import requests
 import json
 import os
-import time
 import sqlite3
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
 import random
+from datetime import datetime, timedelta, date
+from typing import Dict, List, Optional
 
-# ── Load .env file automatically ──────────────────────────────────────────────
 try:
     from dotenv import load_dotenv
     load_dotenv()
-    _DOTENV_LOADED = True
 except ImportError:
-    _DOTENV_LOADED = False  # fall back to system env vars
+    pass
 
-# ── Optional NLP imports ──────────────────────────────────────────────────────
-try:
-    from textblob import TextBlob
-    TEXTBLOB_AVAILABLE = True
-except ImportError:
-    TEXTBLOB_AVAILABLE = False
-
-try:
-    import spacy
-    SPACY_AVAILABLE = True
-    try:
-        nlp = spacy.load("en_core_web_sm")
-    except Exception:
-        nlp = None
-except ImportError:
-    SPACY_AVAILABLE = False
-    nlp = None
-
+# ── Page config (MUST be first Streamlit call) ────────────────────────────────
+st.set_page_config(
+    page_title="Mindful Pro",
+    page_icon="🌿",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CONFIGURATION
+#  CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Config:
-    """Central configuration — reads secrets from .env / environment variables."""
-
-    # ── LM Studio ─────────────────────────────────────────────────────────────
-    LM_STUDIO_BASE_URL   = os.getenv("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234")
-    LM_STUDIO_MODELS_URL = f"{LM_STUDIO_BASE_URL}/v1/models"
-    LM_STUDIO_CHAT_URL   = f"{LM_STUDIO_BASE_URL}/v1/chat/completions"
-
-    # ── Groq ──────────────────────────────────────────────────────────────────
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
-    # Use a current supported Groq model (llama-3.1-70b-versatile is deprecated)
-    GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama3-70b-8192")
+    GROQ_MODEL   = "llama-3.1-8b-instant"   # fast, small, great quality
+    TEMPERATURE  = 0.75
+    MAX_TOKENS   = 500
+    DB_PATH      = "mindful_pro.db"
 
-    # ── Database ──────────────────────────────────────────────────────────────
-    DB_PATH = os.getenv("DB_PATH", "mindful_pro.db")
+    AFFIRMATIONS = [
+        "You are stronger than you think.",
+        "Progress, not perfection.",
+        "Your feelings are valid — and they will pass.",
+        "Small steps still move you forward.",
+        "You've survived every hard day so far.",
+        "You are not your thoughts.",
+        "Healing is not linear — be patient with yourself.",
+        "You deserve the same compassion you give others.",
+        "Rest is productive. Recovering is worthwhile.",
+        "One moment at a time is always enough.",
+    ]
 
-    # ── AI generation parameters ──────────────────────────────────────────────
-    TEMPERATURE = float(os.getenv("TEMPERATURE", "0.8"))
-    MAX_TOKENS  = int(os.getenv("MAX_TOKENS", "500"))
+    CRISIS_LINES = [
+        ("🇮🇳 iCall (India)",      "+91-9152987821"),
+        ("🇮🇳 AASRA (India)",       "+91-9820466726"),
+        ("🇺🇸 988 Lifeline (USA)",   "988"),
+        ("🇺🇸 Crisis Text (USA)",    "Text HOME → 741741"),
+        ("🇬🇧 Samaritans (UK)",      "116 123"),
+    ]
 
-    # ── App metadata ──────────────────────────────────────────────────────────
-    APP_NAME = "MINDFUL PRO"
-    VERSION  = "2.1.0"
+    EMOTIONS = ["😰 Anxious","😢 Sad","😠 Angry","😓 Overwhelmed",
+                "😴 Exhausted","🤔 Confused","😐 Neutral","🙂 Hopeful","😊 Happy"]
 
-    # ── Crisis hotlines ───────────────────────────────────────────────────────
-    CRISIS_HOTLINES = {
-        "india": [
-            {"name": "AASRA",                 "number": "+91-9820466726",  "hours": "24/7"},
-            {"name": "iCall",                 "number": "+91-9152987821",  "hours": "Mon-Sat 8am-10pm"},
-            {"name": "NIMHANS",               "number": "+91-80-26995000", "hours": "24/7"},
-            {"name": "Vandrevala Foundation", "number": "+91-9999666555",  "hours": "24/7"},
-        ],
-        "usa": [
-            {"name": "988 Suicide & Crisis Lifeline", "number": "988",               "hours": "24/7"},
-            {"name": "Crisis Text Line",              "number": "Text HOME to 741741","hours": "24/7"},
-            {"name": "SAMHSA",                        "number": "1-800-662-4357",    "hours": "24/7"},
-        ],
-        "uk": [
-            {"name": "Samaritans", "number": "116 123",       "hours": "24/7"},
-            {"name": "CALM",       "number": "0800 58 58 58", "hours": "5pm-midnight"},
-        ],
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CUSTOM CSS  — calm, therapeutic dark theme
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def inject_css():
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap');
+
+    /* ── Root variables ── */
+    :root {
+        --bg:          #0e1117;
+        --surface:     #161b25;
+        --surface2:    #1e2535;
+        --border:      #2a3347;
+        --accent:      #5b8ff0;
+        --accent-soft: #3d6ad6;
+        --green:       #52c788;
+        --amber:       #f0b429;
+        --red:         #e05b5b;
+        --text:        #e8ecf4;
+        --muted:       #8892a4;
+        --radius:      14px;
     }
 
+    /* ── Global reset ── */
+    html, body, .stApp {
+        background-color: var(--bg) !important;
+        color: var(--text) !important;
+        font-family: 'DM Sans', sans-serif !important;
+    }
+
+    h1, h2, h3 {
+        font-family: 'DM Serif Display', Georgia, serif !important;
+        color: var(--text) !important;
+        letter-spacing: -0.02em;
+    }
+
+    /* ── Sidebar ── */
+    [data-testid="stSidebar"] {
+        background: var(--surface) !important;
+        border-right: 1px solid var(--border) !important;
+    }
+    [data-testid="stSidebar"] * { color: var(--text) !important; }
+
+    /* ── Chat messages ── */
+    .user-msg {
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius) var(--radius) 4px var(--radius);
+        padding: 14px 18px;
+        margin: 8px 0 8px 48px;
+        font-size: 0.95rem;
+        line-height: 1.65;
+    }
+    .bot-msg {
+        background: linear-gradient(135deg, #1a2540 0%, #1c2a45 100%);
+        border: 1px solid #2e4070;
+        border-radius: var(--radius) var(--radius) var(--radius) 4px;
+        padding: 16px 20px;
+        margin: 8px 48px 8px 0;
+        font-size: 0.95rem;
+        line-height: 1.75;
+    }
+    .bot-label {
+        font-size: 0.72rem;
+        color: var(--accent);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+        font-weight: 500;
+    }
+    .user-label {
+        font-size: 0.72rem;
+        color: var(--muted);
+        text-align: right;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+        font-weight: 500;
+    }
+
+    /* ── Cards ── */
+    .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 20px 24px;
+        margin: 12px 0;
+    }
+    .card-accent {
+        border-left: 3px solid var(--accent);
+    }
+    .card-green  { border-left: 3px solid var(--green); }
+    .card-amber  { border-left: 3px solid var(--amber); }
+    .card-red    { border-left: 3px solid var(--red); }
+
+    /* ── Emotion badge ── */
+    .emotion-badge {
+        display: inline-block;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        padding: 4px 12px;
+        font-size: 0.82rem;
+        color: var(--accent);
+        margin-right: 6px;
+        margin-bottom: 4px;
+    }
+
+    /* ── Mood bar ── */
+    .mood-bar-wrap { background: var(--border); border-radius: 4px; height: 8px; }
+    .mood-bar-fill { height: 8px; border-radius: 4px;
+                     background: linear-gradient(90deg, var(--accent-soft), var(--green)); }
+
+    /* ── Metric tiles ── */
+    .metric-tile {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 18px 20px;
+        text-align: center;
+    }
+    .metric-value {
+        font-family: 'DM Serif Display', serif;
+        font-size: 2.4rem;
+        color: var(--accent);
+        line-height: 1;
+    }
+    .metric-label {
+        font-size: 0.78rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-top: 6px;
+    }
+
+    /* ── Affirmation banner ── */
+    .affirmation {
+        background: linear-gradient(135deg, #1a2a4a, #1e3555);
+        border: 1px solid #2e4d80;
+        border-radius: var(--radius);
+        padding: 18px 24px;
+        font-family: 'DM Serif Display', serif;
+        font-style: italic;
+        font-size: 1.15rem;
+        color: #a8c4f0;
+        text-align: center;
+        margin: 12px 0 20px 0;
+    }
+
+    /* ── Crisis box ── */
+    .crisis-box {
+        background: #2a1818;
+        border: 1px solid var(--red);
+        border-radius: var(--radius);
+        padding: 20px 24px;
+    }
+
+    /* ── Buttons ── */
+    .stButton > button {
+        background: var(--surface2) !important;
+        color: var(--text) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 10px !important;
+        font-family: 'DM Sans', sans-serif !important;
+        font-size: 0.9rem !important;
+        transition: all 0.15s ease !important;
+    }
+    .stButton > button:hover {
+        border-color: var(--accent) !important;
+        color: var(--accent) !important;
+    }
+
+    /* ── Inputs ── */
+    .stTextArea textarea, .stTextInput input, .stSelectbox select {
+        background: var(--surface2) !important;
+        color: var(--text) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 10px !important;
+        font-family: 'DM Sans', sans-serif !important;
+    }
+    .stTextArea textarea:focus, .stTextInput input:focus {
+        border-color: var(--accent) !important;
+        box-shadow: 0 0 0 2px rgba(91,143,240,0.2) !important;
+    }
+
+    /* ── Sliders ── */
+    .stSlider [data-baseweb="slider"] { padding: 6px 0; }
+    .stSlider [data-testid="stSlider"] > div > div > div {
+        background: var(--accent) !important;
+    }
+
+    /* ── Select boxes ── */
+    .stSelectbox [data-baseweb="select"] > div {
+        background: var(--surface2) !important;
+        border-color: var(--border) !important;
+    }
+
+    /* ── Tab styling ── */
+    .stTabs [data-baseweb="tab-list"] {
+        background: var(--surface) !important;
+        border-radius: var(--radius) !important;
+        border: 1px solid var(--border) !important;
+        padding: 4px !important;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background: transparent !important;
+        color: var(--muted) !important;
+        border-radius: 10px !important;
+        font-family: 'DM Sans', sans-serif !important;
+        font-size: 0.88rem !important;
+    }
+    .stTabs [aria-selected="true"] {
+        background: var(--surface2) !important;
+        color: var(--text) !important;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Divider ── */
+    hr { border-color: var(--border) !important; margin: 16px 0 !important; }
+
+    /* ── Hide Streamlit chrome ── */
+    #MainMenu { visibility: hidden; }
+    footer    { visibility: hidden; }
+    [data-testid="stToolbar"] { display: none; }
+
+    /* ── Plotly chart backgrounds ── */
+    .js-plotly-plot .plotly { background: transparent !important; }
+
+    /* ── Goal item ── */
+    .goal-item {
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin: 6px 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .goal-done { opacity: 0.5; text-decoration: line-through; }
+
+    /* ── Streak fire ── */
+    .streak-number {
+        font-family: 'DM Serif Display', serif;
+        font-size: 3.5rem;
+        color: var(--amber);
+        line-height: 1;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# LM STUDIO MODEL MANAGER
+#  DATABASE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class LMStudioModelManager:
-    """
-    Manages LM Studio connection, model listing, and interactive model selection.
+@st.cache_resource
+def get_db():
+    return Database()
 
-    Features:
-    - Auto-detect & list all models loaded in LM Studio
-    - Interactive selection via the 'models' chat command
-    - Per-session model persistence
-    - Graceful fallback when LM Studio is offline
-    """
-
+class Database:
     def __init__(self):
-        self.selected_model: Optional[str] = None
-        self.available_models: List[Dict]  = []
-        self.is_connected: bool            = False
-        self._connect()
+        with sqlite3.connect(Config.DB_PATH) as c:
+            c.executescript("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT, role TEXT, content TEXT, session_id TEXT
+                );
+                CREATE TABLE IF NOT EXISTS mood_journal (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT, mood_score INTEGER, emotion TEXT,
+                    note TEXT, energy INTEGER, sleep_hours REAL
+                );
+                CREATE TABLE IF NOT EXISTS gratitude (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT, entry TEXT
+                );
+                CREATE TABLE IF NOT EXISTS goals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created TEXT, title TEXT, category TEXT,
+                    completed INTEGER DEFAULT 0, completed_date TEXT
+                );
+                CREATE TABLE IF NOT EXISTS streaks (
+                    id INTEGER PRIMARY KEY, last_checkin TEXT,
+                    current_streak INTEGER DEFAULT 0,
+                    longest_streak INTEGER DEFAULT 0,
+                    total_days INTEGER DEFAULT 0
+                );
+            """)
 
-    # ── Connection ────────────────────────────────────────────────────────────
+    # ── Mood ──────────────────────────────────────────────────────────────────
+    def log_mood(self, score, emotion, note, energy, sleep):
+        today = date.today().isoformat()
+        with sqlite3.connect(Config.DB_PATH) as c:
+            c.execute("INSERT INTO mood_journal(date,mood_score,emotion,note,energy,sleep_hours)"
+                      " VALUES(?,?,?,?,?,?)", (today,score,emotion,note,energy,sleep))
+        self._update_streak()
 
-    def _connect(self) -> bool:
-        """
-        Connect to LM Studio server.
+    def get_mood_history(self, days=14):
+        since = (date.today()-timedelta(days=days)).isoformat()
+        with sqlite3.connect(Config.DB_PATH) as c:
+            rows = c.execute("SELECT date,mood_score,emotion,note,energy,sleep_hours "
+                             "FROM mood_journal WHERE date>=? ORDER BY date", (since,)).fetchall()
+        return [{"date":r[0],"score":r[1],"emotion":r[2],
+                 "note":r[3],"energy":r[4],"sleep":r[5]} for r in rows]
 
-        LM Studio's 'Just-in-time model loading' means /v1/models returns an
-        empty list until the first actual request triggers a load. So:
-        1. Ping /v1/models — a 200 means the SERVER is up (even if list is empty)
-        2. If list is empty, send a tiny warm-up chat to trigger JIT loading
-        3. Re-fetch models after warm-up
-        """
-        try:
-            resp = requests.get(Config.LM_STUDIO_MODELS_URL, timeout=5)
-            if resp.status_code != 200:
-                self.is_connected = False
-                return False
+    # ── Gratitude ─────────────────────────────────────────────────────────────
+    def log_gratitude(self, entries: List[str]):
+        today = date.today().isoformat()
+        with sqlite3.connect(Config.DB_PATH) as c:
+            for e in entries:
+                if e.strip():
+                    c.execute("INSERT INTO gratitude(date,entry) VALUES(?,?)", (today,e.strip()))
 
-            # Server is reachable
-            self.is_connected = True
-            models = resp.json().get("data", [])
+    def get_gratitude(self, days=30):
+        since = (date.today()-timedelta(days=days)).isoformat()
+        with sqlite3.connect(Config.DB_PATH) as c:
+            rows = c.execute("SELECT date,entry FROM gratitude "
+                             "WHERE date>=? ORDER BY date DESC", (since,)).fetchall()
+        return [{"date":r[0],"entry":r[1]} for r in rows]
 
-            # JIT mode: model list is empty until first request fires the load
-            if not models:
-                print("  ⏳  LM Studio connected — warming up JIT model load...")
-                self._jit_warmup()
-                try:
-                    resp2  = requests.get(Config.LM_STUDIO_MODELS_URL, timeout=5)
-                    models = resp2.json().get("data", []) if resp2.status_code == 200 else []
-                except Exception:
-                    pass
+    # ── Goals ─────────────────────────────────────────────────────────────────
+    def add_goal(self, title, category):
+        with sqlite3.connect(Config.DB_PATH) as c:
+            cur = c.execute("INSERT INTO goals(created,title,category) VALUES(?,?,?)",
+                            (datetime.now().isoformat(), title, category))
+            return cur.lastrowid
 
-            self.available_models = models
-            if models and not self.selected_model:
-                self.selected_model = models[0]["id"]
+    def complete_goal(self, goal_id):
+        with sqlite3.connect(Config.DB_PATH) as c:
+            c.execute("UPDATE goals SET completed=1, completed_date=? WHERE id=?",
+                      (date.today().isoformat(), goal_id))
 
-            return True
+    def delete_goal(self, goal_id):
+        with sqlite3.connect(Config.DB_PATH) as c:
+            c.execute("DELETE FROM goals WHERE id=?", (goal_id,))
 
-        except Exception:
-            pass
-
-        self.is_connected = False
-        return False
-
-    def _jit_warmup(self):
-        """Send a 1-token request to trigger LM Studio's Just-in-time model load."""
-        try:
-            requests.post(
-                Config.LM_STUDIO_CHAT_URL,
-                json={
-                    "model":      "llm",
-                    "messages":   [{"role": "user", "content": "hi"}],
-                    "max_tokens": 1,
-                },
-                timeout=60,   # JIT load can take 10-30s on first call
-            )
-        except Exception:
-            pass  # Timeout/error is fine — it still triggers the load
-
-    def refresh(self) -> bool:
-        return self._connect()
-
-    # ── Listing ───────────────────────────────────────────────────────────────
-
-    def list_models(self) -> List[Dict]:
-        self.refresh()
-        return self.available_models
-
-    def print_models(self):
-        models = self.list_models()
-
-        print("\n╔══════════════════════════════════════════════════════════════════╗")
-        print("║           🤖  LM STUDIO — AVAILABLE MODELS                      ║")
-        print("╚══════════════════════════════════════════════════════════════════╝\n")
-
-        if not self.is_connected:
-            print("  ❌  Cannot reach LM Studio at", Config.LM_STUDIO_BASE_URL)
-            print("      • Open LM Studio and start the Local Server on port 1234.\n")
-            return
-
-        if not models:
-            print("  ⚠️  LM Studio is running but no model is loaded.")
-            print("      Go to Local Server tab → select a model → Start Server.\n")
-            return
-
-        print(f"  {len(models)} model(s) loaded:\n")
-        for idx, m in enumerate(models, 1):
-            mid      = m.get("id", "unknown")
-            owned_by = m.get("owned_by", "")
-            created  = m.get("created", "")
-            marker   = "▶" if mid == self.selected_model else " "
-            print(f"  [{marker}] {idx}.  {mid}")
-            if owned_by:
-                print(f"           Owner   : {owned_by}")
-            if created:
-                try:
-                    ts = datetime.fromtimestamp(int(created)).strftime("%Y-%m-%d")
-                    print(f"           Created : {ts}")
-                except Exception:
-                    pass
-            print()
-
-        print(f"  Currently selected → {self.selected_model or 'None'}\n")
-
-    # ── Interactive selection ─────────────────────────────────────────────────
-
-    def interactive_select(self):
-        self.print_models()
-
-        if not self.is_connected or not self.available_models:
-            return
-
-        print("  Enter the number to switch models, or press Enter to keep current.\n")
-        choice = input("  Choice: ").strip()
-
-        if not choice:
-            print(f"\n  ✔ Keeping: {self.selected_model}\n")
-            return
-
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(self.available_models):
-                self.selected_model = self.available_models[idx]["id"]
-                print(f"\n  ✔ Model switched to: {self.selected_model}\n")
+    def get_goals(self, completed=None):
+        with sqlite3.connect(Config.DB_PATH) as c:
+            if completed is None:
+                rows = c.execute("SELECT id,created,title,category,completed,completed_date "
+                                 "FROM goals ORDER BY completed,created DESC").fetchall()
             else:
-                print("\n  ⚠️  Invalid number — no change.\n")
-        except ValueError:
-            print("\n  ⚠️  Please enter a number — no change.\n")
+                rows = c.execute("SELECT id,created,title,category,completed,completed_date "
+                                 "FROM goals WHERE completed=? ORDER BY created DESC",
+                                 (1 if completed else 0,)).fetchall()
+        return [{"id":r[0],"created":r[1],"title":r[2],"category":r[3],
+                 "completed":r[4],"completed_date":r[5]} for r in rows]
 
-    # ── Chat ──────────────────────────────────────────────────────────────────
+    # ── Streaks ───────────────────────────────────────────────────────────────
+    def _update_streak(self):
+        today     = date.today().isoformat()
+        yesterday = (date.today()-timedelta(days=1)).isoformat()
+        with sqlite3.connect(Config.DB_PATH) as c:
+            row = c.execute("SELECT last_checkin,current_streak,longest_streak,total_days "
+                            "FROM streaks WHERE id=1").fetchone()
+            if not row:
+                c.execute("INSERT INTO streaks VALUES(1,?,1,1,1)", (today,)); return
+            last,cur,longest,total = row
+            if last == today: return
+            cur = cur+1 if last==yesterday else 1
+            c.execute("UPDATE streaks SET last_checkin=?,current_streak=?,longest_streak=?,total_days=?"
+                      " WHERE id=1", (today,cur,max(longest,cur),total+1))
 
-    def chat(
-        self,
-        messages: List[Dict],
-        temperature: Optional[float] = None,
-        max_tokens:  Optional[int]   = None,
-    ) -> Tuple[str, float]:
-        """Send messages to the selected LM Studio model. Returns (text, ms)."""
-        if not self.is_connected:
-            return "", 0.0
+    def get_streak(self):
+        with sqlite3.connect(Config.DB_PATH) as c:
+            row = c.execute("SELECT last_checkin,current_streak,longest_streak,total_days "
+                            "FROM streaks WHERE id=1").fetchone()
+        return {"current":row[1],"longest":row[2],"total":row[3],"last":row[0]} if row \
+               else {"current":0,"longest":0,"total":0,"last":None}
 
-        # JIT mode: no model selected yet — use "llm" (LM Studio's default JIT id)
-        model = self.selected_model or "llm"
+    # ── Conversation log ──────────────────────────────────────────────────────
+    def log_turn(self, role, content, session_id):
+        with sqlite3.connect(Config.DB_PATH) as c:
+            c.execute("INSERT INTO conversations(timestamp,role,content,session_id) VALUES(?,?,?,?)",
+                      (datetime.now().isoformat(), role, content, session_id))
 
-        payload = {
-            "model":       model,
-            "messages":    messages,
-            "temperature": temperature if temperature is not None else Config.TEMPERATURE,
-            "max_tokens":  max_tokens  if max_tokens  is not None else Config.MAX_TOKENS,
-        }
-
-        try:
-            t0   = time.time()
-            resp = requests.post(Config.LM_STUDIO_CHAT_URL, json=payload, timeout=90)
-            ms   = (time.time() - t0) * 1000
-
-            if resp.status_code == 200:
-                text = resp.json()["choices"][0]["message"]["content"].strip()
-                # If we used JIT "llm" id, try to get the real model name now
-                if not self.selected_model:
-                    self.refresh()
-                return text, ms
-
-            return f"[LM Studio HTTP {resp.status_code}]", ms
-        except requests.exceptions.Timeout:
-            return "[LM Studio timed out — try a smaller model]", 0.0
-        except Exception as e:
-            return f"[LM Studio error: {e}]", 0.0
-
-    # ── Status ────────────────────────────────────────────────────────────────
-
-    def status_line(self) -> str:
-        if not self.is_connected:
-            return "❌  LM Studio: Offline  (open LM Studio → start server)"
-        if not self.available_models:
-            return "⚠️   LM Studio: Connected — no model loaded yet (JIT mode active)"
-        return f"✅  LM Studio: {self.selected_model}"
+    def get_mood_stats(self, days=7):
+        since = (date.today()-timedelta(days=days)).isoformat()
+        with sqlite3.connect(Config.DB_PATH) as c:
+            rows = c.execute("SELECT mood_score,emotion FROM mood_journal "
+                             "WHERE date>=?", (since,)).fetchall()
+        if not rows:
+            return {"avg_score":0,"top_emotion":"—","count":0}
+        scores  = [r[0] for r in rows if r[0]]
+        emotions= [r[1] for r in rows if r[1]]
+        from collections import Counter
+        top = Counter(emotions).most_common(1)[0][0] if emotions else "—"
+        return {"avg_score":round(sum(scores)/len(scores),1) if scores else 0,
+                "top_emotion":top, "count":len(rows)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# INTELLIGENT BRAIN
+#  BRAIN  (lightweight emotion analysis — no dependencies)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class IntelligentBrain:
+class Brain:
+    EMOTION_KW = {
+        "anxious":     ["anxious","nervous","worried","panic","scared","stressed","fear","dread","anxiety"],
+        "sad":         ["sad","depressed","down","hopeless","empty","lonely","miserable","grief","crying"],
+        "angry":       ["angry","frustrated","furious","annoyed","mad","irritated","rage","bitter"],
+        "overwhelmed": ["overwhelmed","drowning","too much","can't handle","crushing","swamped"],
+        "exhausted":   ["exhausted","burnt out","tired","drained","no energy","burned out","depleted"],
+        "confused":    ["confused","lost","don't know","unsure","uncertain","unclear"],
+        "hopeful":     ["hopeful","better","improving","good","happy","excited","optimistic"],
+    }
+    CRISIS_KW = ["suicide","kill myself","end my life","want to die","end it all",
+                 "take my life","not worth living","better off dead","self harm","hurt myself"]
 
-    def __init__(self):
-        self.conversation_memory: List[Dict] = []
-        self.user_profile = {
-            "communication_style": "unknown",
-            "recurring_themes":    [],
-            "effective_techniques":[],
-            "crisis_history":      [],
-            "emotion_patterns":    {},
-            "total_sessions":      0,
-            "first_session":       None,
-            "last_session":        None,
-        }
-        self._load_profile()
-
-    def understand(self, text: str) -> Dict:
-        surface  = self._analyze_surface(text)
-        deeper   = self._analyze_deeper(text, surface)
-        context  = self._analyze_context(text)
-        patterns = self._analyze_patterns(surface, deeper)
-        needs    = self._identify_needs(text, surface, deeper, context)
-
-        understanding = {
-            **surface, **deeper, **context, **patterns,
-            "needs":     needs,
-            "timestamp": datetime.now(),
-        }
-        self._learn(understanding)
-        return understanding
-
-    def _analyze_surface(self, text: str) -> Dict:
+    def analyze(self, text: str) -> Dict:
         t = text.lower()
-
-        emotion_map = {
-            "anxious":     (["anxious","nervous","worried","panic","scared","afraid","stressed",
-                              "tense","uneasy","restless","fear","dread"],
-                            ["very","extremely","really","so","too"]),
-            "sad":         (["sad","depressed","down","hopeless","empty","lonely","miserable",
-                              "worthless","numb","despair","grief"],
-                            ["very","so","completely","totally"]),
-            "angry":       (["angry","frustrated","furious","annoyed","mad","irritated",
-                              "rage","pissed","resentful","bitter"],
-                            ["so","really","extremely","incredibly"]),
-            "overwhelmed": (["overwhelmed","drowning","too much","can't handle","breaking",
-                              "crushing","swamped","buried"],
-                            ["completely","totally","so"]),
-            "confused":    (["confused","lost","don't know","unsure","uncertain","unclear"],
-                            ["really","so","completely"]),
-            "hopeful":     (["hopeful","better","improving","progress","good","happy"],
-                            ["much","really","so"]),
-        }
-
-        intensities: Dict[str, int] = {}
-        for emotion, (keywords, boosters) in emotion_map.items():
-            count = sum(1 for kw in keywords if kw in t)
-            if count:
-                score = min(100, count * 30)
-                if any(b in t for b in boosters):
-                    score = min(100, score + 20)
-                intensities[emotion] = score
-
-        primary = max(intensities, key=intensities.get) if intensities else "neutral"
-
-        is_question        = "?" in text or any(t.startswith(q) for q in
-                             ["what","how","why","when","where","who","can you","could you",
-                              "would you","do you","is there"])
-        seeking_advice     = any(p in t for p in ["what should","how do i","help me","advice",
-                                                   "suggest","recommend","what can i","how can i"])
-        seeking_validation = any(p in t for p in ["is it okay","am i wrong","is this normal",
-                                                   "does this make sense"])
-        venting            = not is_question and len(text.split()) > 20 and not seeking_advice
-
-        if TEXTBLOB_AVAILABLE:
-            try:
-                blob         = TextBlob(text)
-                sentiment    = blob.sentiment.polarity
-                subjectivity = blob.sentiment.subjectivity
-            except Exception:
-                sentiment, subjectivity = self._simple_sentiment(text), 0.5
-        else:
-            sentiment, subjectivity = self._simple_sentiment(text), 0.5
-
-        return {
-            "primary_emotion":    primary,
-            "all_emotions":       list(intensities.keys()),
-            "emotion_intensity":  intensities.get(primary, 0),
-            "is_question":        is_question,
-            "seeking_advice":     seeking_advice,
-            "seeking_validation": seeking_validation,
-            "venting":            venting,
-            "sentiment_score":    sentiment,
-            "subjectivity":       subjectivity,
-            "word_count":         len(text.split()),
-            "original_text":      text,
-        }
-
-    def _simple_sentiment(self, text: str) -> float:
-        pos = ["good","great","happy","better","hope","wonderful","amazing","love"]
-        neg = ["bad","awful","terrible","worse","horrible","hate","worst","sad"]
-        t   = text.lower()
-        p   = sum(1 for w in pos if w in t)
-        n   = sum(1 for w in neg if w in t)
-        return 0.0 if (p + n) == 0 else (p - n) / (p + n)
-
-    def _analyze_deeper(self, text: str, surface: Dict) -> Dict:
-        t = text.lower()
-
-        distortion_map = {
-            "catastrophizing":   ["disaster","terrible","awful","worst","ruin","destroy"],
-            "black_and_white":   ["always","never","everyone","nobody","everything","nothing"],
-            "mind_reading":      ["they think","probably thinks","must think","they don't like"],
-            "fortune_telling":   ["will never","going to fail","won't work","never going to"],
-            "labeling":          ["i'm a failure","i am such a","they're all"],
-            "should_statements": ["should have","shouldn't have","i must","i have to"],
-            "personalization":   ["my fault","because of me","i caused"],
-        }
-        distortions = [d for d, pats in distortion_map.items() if any(p in t for p in pats)]
-
-        underlying_map = {
-            "self_worth":    ["not good enough","failure","worthless","useless",
-                              "inadequate","don't deserve","fake","fraud"],
-            "control":       ["can't control","out of control","helpless","powerless"],
-            "belonging":     ["don't belong","outsider","different from","nobody understands"],
-            "perfectionism": ["must be perfect","have to be perfect","not allowed to fail"],
-            "abandonment":   ["leave me","alone","reject","abandoned"],
-            "safety":        ["unsafe","danger","threat","scared of"],
-            "burnout":       ["exhausted","can't anymore","giving up","too tired","drained"],
-        }
-        issues = [iss for iss, pats in underlying_map.items() if any(p in t for p in pats)]
-
-        needs_map = {
-            "safety":    ["safe","danger","threat","scared","fear"],
-            "belonging": ["alone","lonely","connect","friend","relationship"],
-            "esteem":    ["respect","worth","value","confidence","proud"],
-            "autonomy":  ["control","choice","decide","free","independent"],
-            "meaning":   ["purpose","meaning","why","point","matter"],
-        }
-        unmet = [n for n, sigs in needs_map.items() if any(s in t for s in sigs)]
-
-        return {
-            "cognitive_distortions": distortions,
-            "underlying_issues":     issues,
-            "unmet_needs":           unmet,
-            "complexity_level":      "high" if len(issues) > 2 else "moderate" if issues else "low",
-        }
-
-    def _analyze_context(self, text: str) -> Dict:
-        depth       = len(self.conversation_memory)
-        is_followup = depth > 0
-        opening_up  = shutting_down = False
-
-        if is_followup and depth >= 2:
-            prev_len = len(self.conversation_memory[-1].get("original_text","").split())
-            cur_len  = len(text.split())
-            opening_up    = cur_len > prev_len * 1.3
-            shutting_down = cur_len < prev_len * 0.5
-
-        phases = {0: "introduction", 1: "introduction", 2: "building_rapport",
-                  3: "building_rapport", 4: "exploring", 5: "exploring"}
-        phase = phases.get(depth, "deeper_work")
-
-        prev_emotions = [m.get("primary_emotion") for m in self.conversation_memory[-3:]] \
-                        if is_followup else []
-
-        return {
-            "conversation_depth": depth,
-            "is_followup":        is_followup,
-            "opening_up":         opening_up,
-            "shutting_down":      shutting_down,
-            "phase":              phase,
-            "previous_emotions":  prev_emotions,
-        }
-
-    def _analyze_patterns(self, surface: Dict, deeper: Dict) -> Dict:
-        patterns = {}
-        if self.user_profile["total_sessions"] >= 3:
-            ec = self.user_profile["emotion_patterns"]
-            if ec:
-                patterns["recurring_emotion"] = max(ec, key=ec.get)
-            themes = self.user_profile["recurring_themes"]
-            if themes:
-                tc = {}
-                for th in themes:
-                    tc[th] = tc.get(th, 0) + 1
-                patterns["recurring_theme"] = max(tc, key=tc.get)
-        return patterns
-
-    def _identify_needs(self, text, surface, deeper, context) -> List[str]:
-        needs = []
-        if "safety" in deeper["underlying_issues"]:                               needs.append("safety")
-        if surface["seeking_validation"] or surface["primary_emotion"] \
-                in ["sad","overwhelmed","anxious"]:                                needs.append("validation")
-        if surface["seeking_advice"]:                                             needs.append("practical_guidance")
-        if deeper["cognitive_distortions"]:                                       needs.append("reframing")
-        if surface["venting"]:                                                    needs.append("listening")
-        if surface["is_question"]:                                                needs.append("information")
-        if any(d in deeper["cognitive_distortions"]
-               for d in ["catastrophizing","fortune_telling"]):                    needs.append("anxiety_management")
-        if "self_worth" in deeper["underlying_issues"]:                           needs.append("self_compassion")
-        if "burnout"    in deeper["underlying_issues"]:                           needs.append("boundaries")
-        if not needs:                                                             needs.append("general_support")
-        return needs
-
-    def _learn(self, u: Dict):
-        e = u["primary_emotion"]
-        self.user_profile["emotion_patterns"][e] = \
-            self.user_profile["emotion_patterns"].get(e, 0) + 1
-        for iss in u.get("underlying_issues", []):
-            self.user_profile["recurring_themes"].append(iss)
-        self.user_profile["total_sessions"] += 1
-        self.user_profile["last_session"]    = datetime.now().isoformat()
-        if not self.user_profile["first_session"]:
-            self.user_profile["first_session"] = datetime.now().isoformat()
-        self.conversation_memory.append(u)
-        if len(self.conversation_memory) > 10:
-            self.conversation_memory = self.conversation_memory[-10:]
-        self._save_profile()
-
-    def _load_profile(self):
-        try:
-            conn = sqlite3.connect(Config.DB_PATH)
-            row  = conn.execute("SELECT profile_data FROM user_profile WHERE id=1").fetchone()
-            if row:
-                self.user_profile = json.loads(row[0])
-            conn.close()
-        except Exception:
-            pass
-
-    def _save_profile(self):
-        try:
-            with sqlite3.connect(Config.DB_PATH) as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO user_profile (id, profile_data, updated_at) VALUES (1,?,?)",
-                    (json.dumps(self.user_profile), datetime.now().isoformat()),
-                )
-                conn.commit()
-        except Exception:
-            pass
+        scores = {}
+        for em,kws in self.EMOTION_KW.items():
+            c = sum(1 for kw in kws if kw in t)
+            if c: scores[em] = min(100, c*28)
+        primary = max(scores, key=scores.get) if scores else "neutral"
+        is_crisis = any(kw in t for kw in self.CRISIS_KW)
+        return {"primary_emotion": primary,
+                "emotion_intensity": scores.get(primary, 0),
+                "is_crisis": is_crisis}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# INTELLIGENT RESPONDER
+#  GROQ  (llama-3.1-8b-instant)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class IntelligentResponder:
+SYSTEM_PROMPT = """You are Mindful Pro, a warm and emotionally intelligent mental health companion.
 
-    def __init__(self, lm_manager: LMStudioModelManager):
-        self.lm         = lm_manager
-        self.groq_ready = bool(Config.GROQ_API_KEY)
+Your character:
+- Like a wise, caring friend who happens to have therapeutic training
+- Warm and human — use contractions, varied sentence length, never sound robotic
+- Empathetic first, advice second — always validate before suggesting
 
-    def generate(self, understanding: Dict) -> Tuple[str, str]:
-        """Returns (response_text, source_label)."""
-        # 1) Try LM Studio (works in JIT mode too — uses "llm" fallback id)
-        if self.lm.is_connected:
-            text, ms = self._try_lm_studio(understanding)
-            if text:
-                model_label = self.lm.selected_model or "llm (JIT)"
-                return text, f"LM Studio [{model_label}] ({ms:.0f}ms)"
+Rules:
+- Validate feelings BEFORE any advice or techniques
+- Give specific, actionable guidance — never vague platitudes  
+- Explain briefly WHY a technique works when you suggest one
+- Weave in context from earlier in the conversation when relevant
+- End with a gentle question or open space — don't close things off
+- Keep responses to 2-3 paragraphs (~150-200 words)
+- NEVER diagnose, prescribe, or claim to replace professional therapy
+- If you detect crisis language, immediately provide crisis hotlines"""
 
-        # 2) Try Groq
-        if self.groq_ready:
-            text, ms = self._try_groq(understanding)
-            if text:
-                return text, f"Groq [{Config.GROQ_MODEL}] ({ms:.0f}ms)"
-
-        # 3) Smart rule-based fallback
-        return self._intelligent_fallback(understanding), "Built-in (no AI connected)"
-
-    # ── Prompt builder ────────────────────────────────────────────────────────
-
-    def _build_system_prompt(self, u: Dict) -> str:
-        emotion     = u["primary_emotion"]
-        intensity   = u.get("emotion_intensity", 0)
-        phase       = u.get("phase", "introduction")
-        needs       = u.get("needs", [])
-        distortions = u.get("cognitive_distortions", [])
-
-        base = """You are Mindful Pro, an emotionally intelligent mental health companion.
-
-Personality:
-• Warm, genuine, caring — like a wise friend who truly listens
-• Professional but not clinical; explain psychology in plain language
-• Adaptive — match the user's communication style
-• Honest — acknowledge when professional help is needed
-
-Core rules:
-• Validate emotions FIRST, always
-• Say "I notice / It sounds like / I hear" — never "you should"
-• Give specific, actionable guidance — no generic platitudes
-• Explain WHY techniques work (builds trust and motivation)
-• End with a gentle question or prompt when appropriate
-• NEVER diagnose, prescribe, or claim to replace a therapist"""
-
-        context = f"""
-
-Situation:
-• Detected emotion  : {emotion} (intensity {intensity}%)
-• Conversation phase: {phase}
-• Primary needs     : {', '.join(needs) or 'general support'}"""
-
-        if distortions:
-            context += f"\n• Cognitive distortions : {', '.join(distortions)}"
-
-        phase_hints = {
-            "introduction":    "Be welcoming. Build safety. Don't rush to fix.",
-            "building_rapport":"Show you're listening. Ask gentle follow-ups.",
-            "exploring":       "Start offering insights. Gently challenge thinking.",
-            "deeper_work":     "Explore root causes. Challenge more directly but kindly.",
-        }
-        context += f"\n\nApproach: {phase_hints.get(phase, 'Be supportive.')}"
-
-        if "validation"        in needs: context += "\n• Validate feelings deeply BEFORE anything else."
-        if "practical_guidance"in needs: context += "\n• Offer 2-3 specific, immediately actionable steps."
-        if "reframing"         in needs: context += "\n• Use Socratic questions to guide a perspective shift."
-        if "listening"         in needs: context += "\n• The person is venting — acknowledge first, fix second."
-
-        style = """
-
-Response style:
-• 2-3 short paragraphs, ~150-200 words total
-• Warm, conversational — like texting a therapist friend
-• No jargon, no corporate-speak, no generic bullet-lists
-• Contractions, varied sentence length — sound human
-• If recommending a technique, briefly explain the psychology behind it"""
-
-        return base + context + style
-
-    # ── LM Studio ────────────────────────────────────────────────────────────
-
-    def _try_lm_studio(self, u: Dict) -> Tuple[str, float]:
-        messages = [
-            {"role": "system", "content": self._build_system_prompt(u)},
-            {"role": "user",   "content": u["original_text"]},
-        ]
-        text, ms = self.lm.chat(messages)
-        if text and not text.startswith("[LM Studio"):
-            return text, ms
-        return "", 0.0
-
-    # ── Groq ─────────────────────────────────────────────────────────────────
-
-    def _try_groq(self, u: Dict) -> Tuple[str, float]:
-        messages = [
-            {"role": "system", "content": self._build_system_prompt(u)},
-            {"role": "user",   "content": u["original_text"]},
-        ]
-        try:
-            t0   = time.time()
-            resp = requests.post(
-                Config.GROQ_URL,
-                headers={
-                    "Authorization": f"Bearer {Config.GROQ_API_KEY}",
-                    "Content-Type":  "application/json",
-                },
-                json={
-                    "model":       Config.GROQ_MODEL,
-                    "messages":    messages,
-                    "temperature": Config.TEMPERATURE,
-                    "max_tokens":  Config.MAX_TOKENS,
-                },
-                timeout=30,
-            )
-            ms = (time.time() - t0) * 1000
-            if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"].strip(), ms
-            err = resp.json().get("error", {}).get("message", resp.text[:120])
-            print(f"\n  ⚠️  Groq error ({resp.status_code}): {err}\n")
-        except requests.exceptions.Timeout:
-            print("\n  ⚠️  Groq timed out.\n")
-        except Exception as e:
-            print(f"\n  ⚠️  Groq exception: {e}\n")
-        return "", 0.0
-
-    # ── Rule-based fallback ───────────────────────────────────────────────────
-
-    def _intelligent_fallback(self, u: Dict) -> str:
-        emotion     = u["primary_emotion"]
-        intensity   = u.get("emotion_intensity", 0)
-        needs       = u.get("needs", [])
-        distortions = u.get("cognitive_distortions", [])
-        issues      = u.get("underlying_issues", [])
-        text        = u["original_text"]
-
-        openings = {
-            "anxious":     ["I can feel the anxiety in your words.",
-                            "That racing-mind feeling is exhausting, isn't it?",
-                            "Anxiety has its grip on you right now."],
-            "sad":         ["There's a heaviness in what you're sharing.",
-                            "I hear the pain in this.",
-                            "That weight you're carrying is real."],
-            "angry":       ["That frustration is real and valid.",
-                            "Something important isn't being heard or respected."],
-            "overwhelmed": ["It sounds like everything is hitting you at once.",
-                            "That drowning feeling — I hear it."],
-            "confused":    ["When thoughts are tangled it's hard to know where to start.",
-                            "That uncertainty is uncomfortable."],
-            "hopeful":     ["I can hear some light coming through.",
-                            "There's something shifting for you."],
-            "neutral":     ["I'm listening.", "Tell me more.", "I'm here with you in this."],
-        }
-        parts = [random.choice(openings.get(emotion, openings["neutral"]))]
-
-        if "validation"        in needs and intensity > 60: parts.append(self._validation_text(emotion, issues))
-        if "practical_guidance"in needs:                    parts.append(self._practical_text(emotion))
-        if "reframing"         in needs and distortions:    parts.append(self._reframing_text(distortions[0]))
-        if "information"       in needs:                    parts.append(self._information_text(text))
-        if "listening"         in needs and len(parts) == 1:parts.append(self._listening_text())
-        if len(parts) == 1:
-            parts.append("What you're dealing with is real. Even talking about it takes courage.")
-
-        closings = (
-            ["What feels most important to you right now?",
-             "Is there more you'd like to share?",
-             "What would help most in this moment?"]
-            if u.get("phase") == "introduction"
-            else ["How does that land with you?", "Does this resonate?",
-                  "Want to explore that further?"]
+def groq_chat(messages: List[Dict], api_key: str) -> str:
+    try:
+        resp = requests.post(
+            Config.GROQ_URL,
+            headers={"Authorization": f"Bearer {api_key}",
+                     "Content-Type": "application/json"},
+            json={"model": Config.GROQ_MODEL,
+                  "messages": messages,
+                  "temperature": Config.TEMPERATURE,
+                  "max_tokens": Config.MAX_TOKENS},
+            timeout=25,
         )
-        parts.append(random.choice(closings))
-        return "\n\n".join(parts)
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        err = ""
+        try: err = resp.json().get("error",{}).get("message","")
+        except: pass
+        return f"⚠️ Groq error ({resp.status_code}): {err or resp.text[:120]}"
+    except requests.exceptions.Timeout:
+        return "⚠️ Request timed out. Please try again."
+    except Exception as e:
+        return f"⚠️ Error: {e}"
 
-    def _validation_text(self, emotion, issues):
-        v = {
-            "anxious":     "Anxiety is your brain trying to protect you — it's not a flaw. What you're feeling makes complete sense.",
-            "sad":         "Sadness this deep is real and valid. You're not broken — you're human dealing with something genuinely hard.",
-            "angry":       "Your anger is information. It's telling you something important isn't right.",
-            "overwhelmed": "When everything feels like too much, it IS too much. That's not weakness — that's reality.",
-        }
-        base = v.get(emotion, "What you're feeling is completely valid.")
-        if "self_worth" in issues:
-            base += " And your worth? That's not up for debate — it just IS."
-        return base
 
-    def _practical_text(self, emotion):
-        g = {
-            "anxious":     "Right now, try 5-4-3-2-1 grounding: name 5 things you see, 4 you can touch, 3 you hear, 2 you smell, 1 you taste. It works because anxiety lives in the future — grounding pulls you back to NOW.",
-            "sad":         "Depression tricks you into doing nothing, which makes it worse. Try one tiny action — step outside for two minutes, send a single text. Motivation follows action, not the other way around.",
-            "overwhelmed": "Brain-dump everything worrying you, then circle only what's genuinely urgent TODAY. Pick the single most important thing and do only that. Everything else can wait.",
-            "angry":       "Cool down first — cold water on your wrists, 10 jumping jacks, or box breathing (4 counts in, 4 hold, 4 out, 4 hold). You can't think clearly while flooded with emotion.",
-        }
-        return g.get(emotion, "Let's break this down into one small, concrete next step you can take today.")
-
-    def _reframing_text(self, distortion):
-        r = {
-            "catastrophizing":   "I notice worst-case thinking here. Ask yourself: what's the MOST LIKELY outcome — not worst, not best, just realistic?",
-            "black_and_white":   "The words 'always' and 'never' are rarely accurate. What's a more nuanced take on this?",
-            "mind_reading":      "You're predicting what others think. What's the actual evidence for that — not the fear, the evidence?",
-            "fortune_telling":   "You're predicting a negative future. You've probably been wrong about predictions before. What if you're wrong about this one?",
-            "labeling":          "You're applying a fixed label to yourself. You're not a static thing — you're a person going through something hard.",
-            "should_statements": "Those 'shoulds' create pressure. Try replacing 'I should' with 'I could' — notice how the feeling shifts.",
-            "personalization":   "You're owning things that aren't fully yours. What parts are actually within your control?",
-        }
-        return r.get(distortion, "I notice a pattern in how you're framing this. What would it look like to see it differently?")
-
-    def _information_text(self, text):
-        t = text.lower()
-        if any(w in t for w in ["think","thought","mind"]):
-            return "Your brain runs ~60,000 thoughts a day and defaults to negative ones — that's its problem-scanning mode, not reality. Thoughts aren't facts; they're guesses shaped by mood and past experience. And we can retrain those patterns."
-        if any(w in t for w in ["why","point","meaning","purpose"]):
-            return "Big 'why' questions often surface when we're in pain. Meaning isn't found passively — it's built through connection, contribution, and doing things that matter to you, even in small ways."
-        return "That's worth exploring carefully. Want to dig into how this connects to what you're feeling?"
-
-    def _listening_text(self):
-        return random.choice([
-            "I hear you. Sometimes the most helpful thing is just being truly heard.",
-            "Thank you for trusting me with this. I'm here with you in it.",
-            "That's a lot to carry. I'm listening — take all the space you need.",
-            "You don't have to have it figured out. Talking about it already matters.",
-        ])
+def build_messages(history: List[Dict], user_msg: str, analysis: Dict) -> List[Dict]:
+    hint = (f"\n\n[Emotion context: {analysis['primary_emotion']} "
+            f"({analysis['emotion_intensity']}% intensity). "
+            f"Validate first, then support.]")
+    msgs = [{"role": "system", "content": SYSTEM_PROMPT + hint}]
+    msgs += history
+    msgs.append({"role": "user", "content": user_msg})
+    return msgs
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CRISIS DETECTOR
+#  SESSION STATE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class CrisisDetector:
-    _CRITICAL = ["suicide","kill myself","end my life","want to die","end it all",
-                 "take my life","not worth living","better off dead"]
-    _HIGH     = ["self harm","hurt myself","cut myself","burn myself","overdose",
-                 "harm myself","injure myself"]
-    _MODERATE = ["can't go on","give up on life","no point living","want to disappear"]
+def init_state():
+    defaults = {
+        "chat_history":  [],      # [{role, content}]
+        "session_id":    datetime.now().strftime("%Y%m%d%H%M%S"),
+        "page":          "Chat",
+        "api_key":       Config.GROQ_API_KEY,
+        "affirmation":   random.choice(Config.AFFIRMATIONS),
+        "brain":         Brain(),
+        "checkin_done_today": False,
+    }
+    for k,v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-    @staticmethod
-    def check(text: str, u: Dict) -> Dict:
-        t        = text.lower()
-        critical = any(kw in t for kw in CrisisDetector._CRITICAL)
-        high     = any(kw in t for kw in CrisisDetector._HIGH)
-        moderate = any(kw in t for kw in CrisisDetector._MODERATE)
-        emotion  = u.get("primary_emotion")
-        intensity= u.get("emotion_intensity", 0)
 
-        if   critical or (high and intensity > 70):                         level = "critical"
-        elif high     or (moderate and intensity > 80):                     level = "high"
-        elif moderate and emotion in ["sad","hopeless"] and intensity > 70: level = "moderate"
+# ═══════════════════════════════════════════════════════════════════════════════
+#  COMPONENTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def render_sidebar(db: Database):
+    with st.sidebar:
+        st.markdown("### 🌿 Mindful Pro")
+        st.caption(f"Model: `{Config.GROQ_MODEL}`")
+        st.divider()
+
+        # API key input if not set
+        if not st.session_state.api_key:
+            key = st.text_input("Groq API Key", type="password",
+                                placeholder="gsk_...",
+                                help="Get a free key at console.groq.com")
+            if key:
+                st.session_state.api_key = key
+                st.rerun()
         else:
-            return {"is_crisis": False, "level": "none"}
+            st.success("✅ Groq connected", icon="✅")
 
-        return {
-            "is_crisis": True,
-            "level":     level,
-            "keywords":  [kw for kw in CrisisDetector._CRITICAL + CrisisDetector._HIGH if kw in t],
+        st.divider()
+
+        # Navigation
+        pages = {
+            "💬 Chat":         "Chat",
+            "🌅 Daily Check-in":"Checkin",
+            "📊 Mood Chart":    "Chart",
+            "🙏 Gratitude":     "Gratitude",
+            "🎯 Goals":         "Goals",
+            "🧘 Toolkit":       "Toolkit",
+            "📈 Progress":      "Progress",
         }
+        for label, key in pages.items():
+            if st.button(label, use_container_width=True,
+                         type="primary" if st.session_state.page==key else "secondary"):
+                st.session_state.page = key
+                st.rerun()
+
+        st.divider()
+
+        # Streak widget
+        streak = db.get_streak()
+        if streak["current"] > 0:
+            fire = "🔥" * min(streak["current"], 7)
+            st.markdown(f"""
+            <div style="text-align:center;padding:12px 0">
+                <div style="font-size:1.6rem">{fire}</div>
+                <div style="font-size:0.8rem;color:#8892a4;margin-top:4px">
+                    {streak['current']}-day streak
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+        # Clear chat
+        if st.session_state.page == "Chat":
+            st.divider()
+            if st.button("🔄 Clear conversation", use_container_width=True):
+                st.session_state.chat_history = []
+                st.session_state.session_id   = datetime.now().strftime("%Y%m%d%H%M%S")
+                st.rerun()
+
+        st.divider()
+        st.caption("All data stored locally. Nothing leaves your device except Groq API calls.")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# THERAPY TOOLKIT
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class TherapyToolkit:
-
-    @staticmethod
-    def breathing_478():
-        print("\n╔═══════════════════════════════════════════════════════════╗")
-        print("║     🫁  4-7-8 BREATHING  —  90-Second Calm Down          ║")
-        print("╚═══════════════════════════════════════════════════════════╝\n")
-        print("Activates your parasympathetic nervous system — your body's natural calm-down switch.\n")
-        input("Find a comfortable position and press Enter when ready...")
-        print()
-        for i in range(1, 4):
-            print(f"  ── Round {i} / 3 ──")
-            print("  Breathe IN through your nose ...  (4 counts)")
-            time.sleep(4)
-            print("  HOLD ..............................  (7 counts)")
-            time.sleep(7)
-            print("  Breathe OUT through your mouth ..  (8 counts)")
-            time.sleep(8)
-            print()
-        print("✨ Notice any shift — even small changes matter.\n")
-
-    @staticmethod
-    def grounding_54321():
-        print("\n╔═══════════════════════════════════════════════════════════╗")
-        print("║     🧘  5-4-3-2-1 GROUNDING TECHNIQUE                    ║")
-        print("╚═══════════════════════════════════════════════════════════╝\n")
-        print("Anxiety lives in the future. This pulls you back to NOW.\n")
-        prompts = [("👁  5 things you SEE", 5), ("✋ 4 things you can TOUCH", 4),
-                   ("👂 3 things you HEAR", 3), ("👃 2 things you SMELL", 2),
-                   ("👅 1 thing you TASTE", 1)]
-        for prompt, count in prompts:
-            print(prompt + ":")
-            for i in range(count):
-                input(f"   {i+1}. ")
-            print()
-        print("✨ You're here. You're present. You're grounded.\n")
-
-    @staticmethod
-    def thought_record():
-        print("\n╔═══════════════════════════════════════════════════════════╗")
-        print("║     📝  CBT THOUGHT RECORD                                ║")
-        print("╚═══════════════════════════════════════════════════════════╝\n")
-        situation   = input("Situation:\n→ ")
-        thought     = input("\nAutomatic thought:\n→ ")
-        emotion_pct = input("\nEmotion / intensity (0-100):\n→ ")
-        ev_for      = input("\nEvidence FOR the thought:\n→ ")
-        ev_against  = input("\nEvidence AGAINST the thought:\n→ ")
-        alternative = input("\nBalanced alternative thought:\n→ ")
-        new_emotion = input("\nNew emotion intensity (0-100):\n→ ")
-        print("\n─── Summary ───")
-        print(f"Original: {thought} [{emotion_pct}%]")
-        print(f"Balanced: {alternative} [{new_emotion}%]")
-        print("\n✨ Notice the shift. Even small reductions in intensity matter.\n")
-
-    @staticmethod
-    def show_all_techniques():
-        print("\n╔═══════════════════════════════════════════════════════════╗")
-        print("║     🎯  THERAPY TECHNIQUES LIBRARY                        ║")
-        print("╚═══════════════════════════════════════════════════════════╝\n")
-        menu = {
-            "1": ("4-7-8 Breathing",     "Anxiety, stress, sleep issues",  "90 seconds"),
-            "2": ("5-4-3-2-1 Grounding", "Panic, overwhelm, anxiety",      "3–5 minutes"),
-            "3": ("CBT Thought Record",  "Negative/distorted thinking",    "5–10 minutes"),
-        }
-        for k, (name, use_for, duration) in menu.items():
-            print(f"  {k}.  {name}")
-            print(f"       For  : {use_for}")
-            print(f"       Time : {duration}\n")
-        choice = input("  Enter a number to begin, or press Enter to skip:\n  → ").strip()
-        if   choice == "1": TherapyToolkit.breathing_478()
-        elif choice == "2": TherapyToolkit.grounding_54321()
-        elif choice == "3": TherapyToolkit.thought_record()
-        elif choice:        print("\n  ✨ More techniques coming soon!\n")
+def render_crisis_box():
+    st.markdown("""
+    <div class="crisis-box">
+        <h4 style="color:#e05b5b;margin:0 0 12px 0">🚨 You're not alone — please reach out now</h4>
+        <p style="color:#e8ecf4;margin:0 0 12px 0;font-size:0.9rem">
+        What you're feeling right now is not permanent. Trained people are ready to help.</p>
+    </div>""", unsafe_allow_html=True)
+    cols = st.columns(2)
+    for i,(name,number) in enumerate(Config.CRISIS_LINES):
+        with cols[i%2]:
+            st.markdown(f"""
+            <div class="card card-red" style="margin:4px 0;padding:10px 14px">
+                <div style="font-size:0.82rem;color:#8892a4">{name}</div>
+                <div style="font-size:1rem;font-weight:500;color:#f0b429">{number}</div>
+            </div>""", unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# DATABASE MANAGER
-# ═══════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+#  CHAT PAGE
+# ─────────────────────────────────────────────────────────────────────────────
 
-class DatabaseManager:
+def page_chat(db: Database):
+    st.markdown("## 💬 Talk to Mindful Pro")
 
-    def __init__(self):
-        self._init()
+    # Affirmation banner
+    st.markdown(f'<div class="affirmation">"{st.session_state.affirmation}"</div>',
+                unsafe_allow_html=True)
 
-    def _init(self):
-        try:
-            with sqlite3.connect(Config.DB_PATH) as conn:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS conversations (
-                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                        timestamp       TEXT    NOT NULL,
-                        user_message    TEXT    NOT NULL,
-                        emotion         TEXT,
-                        intensity       INTEGER,
-                        bot_response    TEXT,
-                        crisis_detected INTEGER DEFAULT 0,
-                        model_used      TEXT
-                    )
-                """)
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS user_profile (
-                        id           INTEGER PRIMARY KEY,
-                        profile_data TEXT    NOT NULL,
-                        updated_at   TEXT    NOT NULL
-                    )
-                """)
-                conn.commit()
-        except Exception as e:
-            print(f"  ⚠️  DB init error: {e}")
+    if not st.session_state.api_key:
+        st.warning("Add your Groq API key in the sidebar to start chatting. "
+                   "Get a free key at [console.groq.com](https://console.groq.com).")
+        return
 
-    def log(self, user_msg: str, u: Dict, response: str, crisis: bool, model: str = ""):
-        try:
-            with sqlite3.connect(Config.DB_PATH) as conn:
-                conn.execute(
-                    "INSERT INTO conversations "
-                    "(timestamp,user_message,emotion,intensity,bot_response,crisis_detected,model_used) "
-                    "VALUES (?,?,?,?,?,?,?)",
-                    (datetime.now().isoformat(), user_msg,
-                     u.get("primary_emotion","?"), u.get("emotion_intensity", 0),
-                     response, 1 if crisis else 0, model),
-                )
-                conn.commit()
-        except Exception:
-            pass
-
-    def get_stats(self, days: int = 7) -> Dict:
-        try:
-            since = (datetime.now() - timedelta(days=days)).isoformat()
-            with sqlite3.connect(Config.DB_PATH) as conn:
-                total      = conn.execute("SELECT COUNT(*) FROM conversations WHERE timestamp>?", (since,)).fetchone()[0]
-                er         = conn.execute("SELECT emotion, COUNT(*) c FROM conversations WHERE timestamp>? GROUP BY emotion ORDER BY c DESC LIMIT 1", (since,)).fetchone()
-                avg_int    = conn.execute("SELECT AVG(intensity) FROM conversations WHERE timestamp>?", (since,)).fetchone()[0] or 0
-                crisis_cnt = conn.execute("SELECT COUNT(*) FROM conversations WHERE crisis_detected=1 AND timestamp>?", (since,)).fetchone()[0]
-            return {
-                "total": total,
-                "top_emotion": er[0] if er else "N/A",
-                "top_emotion_count": er[1] if er else 0,
-                "avg_intensity": round(avg_int, 1),
-                "crisis_count": crisis_cnt,
-                "days": days,
-            }
-        except Exception:
-            return {"total": 0, "top_emotion": "N/A", "top_emotion_count": 0,
-                    "avg_intensity": 0, "crisis_count": 0, "days": days}
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MAIN APPLICATION
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class MindfulPro:
-
-    def __init__(self):
-        print("\n  Starting Mindful Pro v2.1.0 …")
-        self.lm         = LMStudioModelManager()
-        self.brain      = IntelligentBrain()
-        self.responder  = IntelligentResponder(self.lm)
-        self.crisis_det = CrisisDetector()
-        self.toolkit    = TherapyToolkit()
-        self.db         = DatabaseManager()
-        self._welcome()
-
-    def _welcome(self):
-        print("\n╔══════════════════════════════════════════════════════════════════════════════╗")
-        print("║                                                                              ║")
-        print("║         🌟  MINDFUL PRO  —  Mental Wellness Companion  v2.1.0                ║")
-        print("║                                                                              ║")
-        print("╚══════════════════════════════════════════════════════════════════════════════╝\n")
-
-        if _DOTENV_LOADED:
-            print("  📄  .env loaded successfully")
+    # Render history
+    for msg in st.session_state.chat_history:
+        if msg["role"] == "user":
+            st.markdown(f"""
+            <div>
+                <div class="user-label">You</div>
+                <div class="user-msg">{msg["content"]}</div>
+            </div>""", unsafe_allow_html=True)
         else:
-            print("  ℹ️   python-dotenv not installed (run: pip install python-dotenv)")
+            st.markdown(f"""
+            <div>
+                <div class="bot-label">🌿 Mindful Pro · {Config.GROQ_MODEL}</div>
+                <div class="bot-msg">{msg["content"].replace(chr(10),"<br>")}</div>
+            </div>""", unsafe_allow_html=True)
 
-        print(f"  {self.lm.status_line()}")
+    # Input area
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    user_input = st.chat_input("What's on your mind?", key="chat_input")
 
-        if self.responder.groq_ready:
-            print(f"  ✅  Groq: Connected  [{Config.GROQ_MODEL}]")
-        else:
-            print("  ℹ️   Groq: No API key — add GROQ_API_KEY to your .env")
+    if user_input:
+        analysis = st.session_state.brain.analyze(user_input)
 
-        if self.brain.user_profile["total_sessions"] > 0:
-            print(f"\n  👋  Welcome back!  {self.brain.user_profile['total_sessions']} conversations so far.")
-
-        print("\n" + "─" * 78 + "\n")
-
-    def chat(self, user_input: str):
-        u            = self.brain.understand(user_input)
-        crisis_check = self.crisis_det.check(user_input, u)
-
-        if crisis_check["is_crisis"]:
-            self._handle_crisis(crisis_check)
-            self.db.log(user_input, u, "[CRISIS RESPONSE]", True, "crisis-handler")
+        # Crisis check
+        if analysis["is_crisis"]:
+            st.session_state.chat_history.append({"role":"user","content":user_input})
+            render_crisis_box()
+            crisis_reply = ("I'm really concerned about what you're sharing. Your safety is the only priority right now. "
+                            "Please reach out to one of the crisis lines above — trained counselors are available 24/7. "
+                            "You don't have to face this alone, and what you're feeling right now is not permanent. 💙")
+            st.session_state.chat_history.append({"role":"assistant","content":crisis_reply})
+            db.log_turn("user", user_input, st.session_state.session_id)
+            db.log_turn("assistant", crisis_reply, st.session_state.session_id)
+            st.rerun()
             return
 
-        response, source = self.responder.generate(u)
-        self._display_response(u, response, source)
-        self.db.log(user_input, u, response, False, source)
+        # Build and send to Groq
+        messages = build_messages(st.session_state.chat_history, user_input, analysis)
 
-    def _handle_crisis(self, crisis: Dict):
-        print("\n" + "═" * 78)
-        print("\n  🚨  I'm really concerned about what you're sharing right now.\n")
-        print("      Your safety is the priority. Please reach out immediately:\n")
-        for region, lines in Config.CRISIS_HOTLINES.items():
-            flag = {"india": "🇮🇳  INDIA", "usa": "🇺🇸  USA", "uk": "🇬🇧  UK"}.get(region, region.upper())
-            print(f"  {flag}:")
-            for h in lines:
-                print(f"     • {h['name']}: {h['number']}  ({h['hours']})")
-            print()
-        print("  💙  You matter. These feelings can and do change.")
-        print("      Please reach out — right now if possible.\n")
-        print("═" * 78 + "\n")
+        with st.spinner(""):
+            reply = groq_chat(messages, st.session_state.api_key)
 
-    def _display_response(self, u: Dict, response: str, source: str):
-        print("\n" + "─" * 78)
+        st.session_state.chat_history.append({"role":"user",      "content":user_input})
+        st.session_state.chat_history.append({"role":"assistant", "content":reply})
+        db.log_turn("user",      user_input, st.session_state.session_id)
+        db.log_turn("assistant", reply,      st.session_state.session_id)
 
-        emotion   = u["primary_emotion"]
-        intensity = u.get("emotion_intensity", 0)
+        # Contextual tip
+        em = analysis["primary_emotion"]
+        tips = {"anxious":"Try typing **breathe** or visit the Toolkit for grounding exercises.",
+                "overwhelmed":"The Toolkit has box breathing and grounding to help right now.",
+                "exhausted":"A short meditation might help — check the Toolkit.",
+                "sad":"The Gratitude practice can gently lift mood over time."}
+        if em in tips:
+            st.info(f"💡 {tips[em]}")
 
-        if emotion != "neutral" and intensity > 30:
-            emojis = {"anxious": "😰", "sad": "😢", "angry": "😠",
-                      "overwhelmed": "😓", "confused": "🤔", "hopeful": "🙂"}
-            bar = "█" * int(intensity / 10) + "░" * (10 - int(intensity / 10))
-            print(f"\n  {emojis.get(emotion,'💬')}  {emotion.title()}  [{bar}] {intensity}%")
+        st.rerun()
 
-        print(f"  🤖  {source}\n")
-        print(self._wrap(response))
 
-        needs = u.get("needs", [])
-        if "anxiety_management" in needs or emotion == "anxious":
-            print("\n  💡  Tip: type 'breathe' for a 90-second calm-down exercise")
-        elif "validation" in needs and intensity > 70:
-            print("\n  💡  Tip: type 'techniques' to see evidence-based coping tools")
+# ─────────────────────────────────────────────────────────────────────────────
+#  DAILY CHECK-IN PAGE
+# ─────────────────────────────────────────────────────────────────────────────
 
-        print("\n" + "─" * 78 + "\n")
+def page_checkin(db: Database):
+    st.markdown("## 🌅 Daily Check-in")
+    st.markdown("Track how you feel each day. Consistency builds self-awareness over time.")
 
-    def _wrap(self, text: str, width: int = 74) -> str:
-        out = []
-        for para in text.split("\n\n"):
-            if para.lstrip().startswith(("**", "•", "#", "-", "1.", "2.", "3.")):
-                out.append(para)
-                continue
-            words, line, lines = para.split(), "", []
-            for w in words:
-                if len(line) + len(w) + 1 <= width:
-                    line += w + " "
-                else:
-                    if line: lines.append(line.rstrip())
-                    line = w + " "
-            if line: lines.append(line.rstrip())
-            out.append("\n".join(lines))
-        return "\n\n".join(out)
+    # Check if done today
+    history = db.get_mood_history(1)
+    if history and history[-1]["date"] == date.today().isoformat():
+        st.success("✅ Check-in complete for today!")
+        entry = history[-1]
+        c1,c2,c3,c4 = st.columns(4)
+        with c1: render_metric("Mood",   f"{entry['score']}/10", "")
+        with c2: render_metric("Emotion", entry['emotion'].title(), "")
+        with c3: render_metric("Energy",  f"{entry['energy']}/5", "")
+        with c4: render_metric("Sleep",   f"{entry['sleep']}h", "")
+        if entry.get("note"):
+            st.markdown(f'<div class="card card-accent"><em>"{entry["note"]}"</em></div>',
+                        unsafe_allow_html=True)
+        if st.button("Update today's check-in"):
+            st.session_state.checkin_done_today = False
+            st.rerun()
+        return
 
-    def show_stats(self):
-        s = self.db.get_stats(7)
-        print("\n╔══════════════════════════════════════════════════════════════════════════════╗")
-        print("║                     📊  YOUR WELLNESS INSIGHTS  (last 7 days)                ║")
-        print("╚══════════════════════════════════════════════════════════════════════════════╝\n")
-        if s["total"] < 3:
-            print(f"  Conversations this week : {s['total']}")
-            print(f"  {3 - s['total']} more needed to generate pattern insights.\n")
-            return
-        print(f"  Total conversations  : {s['total']}")
-        print(f"  Most common emotion  : {s['top_emotion'].title()} ({s['top_emotion_count']}×)")
-        print(f"  Average intensity    : {s['avg_intensity']}%")
-        if s["crisis_count"]:
-            print(f"  ⚠️   Crisis moments  : {s['crisis_count']}  — please consider professional support")
-        penalty = (20 if s["avg_intensity"] > 70 else 10 if s["avg_intensity"] > 50 else 0)
-        score   = max(0, min(100, 70 - penalty - s["crisis_count"] * 15
-                             - (15 if s["top_emotion"] in ["sad","hopeless","anxious"] else 0)))
-        label   = ("Doing well!" if score >= 70 else "Managing." if score >= 50
-                   else "Struggling — extra support recommended." if score >= 30
-                   else "Needs support — please talk to a professional.")
-        print(f"\n  🎯  Wellness Score: {score}/100 — {label}\n")
+    with st.form("checkin_form"):
+        st.markdown("#### How are you feeling today?")
 
-    def interactive(self):
-        print("  Just talk, or use a command:\n")
-        print("    💬  Anything         — share what's on your mind")
-        print("    🤖  models           — list & switch LM Studio model")
-        print("    🫁  breathe          — 90-second breathing exercise")
-        print("    🎯  techniques       — therapy tools menu")
-        print("    📊  stats            — your wellness insights")
-        print("    ❓  help             — all features")
-        print("    👋  exit             — end session\n")
+        mood = st.slider("Overall mood", 1, 10, 5,
+                         help="1 = very bad, 10 = amazing")
+        mood_labels = {1:"😣 Very bad",2:"😢 Bad",3:"😔 Low",4:"😐 Neutral",5:"🙂 Okay",
+                       6:"🙂 Good",7:"😊 Pretty good",8:"😃 Great",9:"🤩 Excellent",10:"✨ Amazing"}
+        st.caption(mood_labels.get(mood,""))
 
-        while True:
-            try:
-                raw = input("You: ").strip()
-                if not raw:
-                    continue
-                cmd = raw.lower()
+        col1, col2 = st.columns(2)
+        with col1:
+            emotion_raw = st.selectbox("Dominant emotion", Config.EMOTIONS)
+            emotion = emotion_raw.split(" ",1)[1].lower() if " " in emotion_raw else emotion_raw.lower()
+        with col2:
+            energy = st.slider("Energy level", 1, 5, 3,
+                               help="1 = depleted, 5 = energised")
 
-                if   cmd == "exit":
-                    print("\n  💙  Take good care of yourself. I'm here whenever you need me.\n")
-                    break
-                elif cmd in ("models","model","select model","change model"):
-                    self.lm.interactive_select()
-                elif cmd in ("breathe","breathing","breath"):
-                    self.toolkit.breathing_478()
-                elif cmd == "ground":
-                    self.toolkit.grounding_54321()
-                elif cmd in ("techniques","tools","exercises"):
-                    self.toolkit.show_all_techniques()
-                elif cmd in ("stats","progress","insights"):
-                    self.show_stats()
-                elif cmd == "help":
-                    self._show_help()
-                else:
-                    self.chat(raw)
+        sleep = st.number_input("Hours slept last night", 0.0, 24.0, 7.0, 0.5)
+        note  = st.text_input("One sentence about today (optional)",
+                              placeholder="e.g. Tough meeting, but managed well")
 
-            except KeyboardInterrupt:
-                print("\n\n  💙  Take care!\n")
-                break
-            except Exception as e:
-                print(f"\n  ⚠️  Unexpected error: {e}\n")
+        submitted = st.form_submit_button("✅ Save check-in", use_container_width=True)
 
-    def _show_help(self):
-        print("\n╔══════════════════════════════════════════════════════════════════════════════╗")
-        print("║                        📖  MINDFUL PRO — ALL FEATURES                        ║")
-        print("╚══════════════════════════════════════════════════════════════════════════════╝\n")
-        sections = [
-            ("🤖 LM STUDIO", [
-                "Type 'models' to list all models loaded in LM Studio",
-                "Select any model interactively — persists for the session",
-                "Active model is shown with every response (with latency)",
-                "Groq is used as cloud backup when LM Studio is offline",
-            ]),
-            ("📄 .ENV FILE", [
-                "GROQ_API_KEY=your_key_here",
-                "Optional overrides: GROQ_MODEL, TEMPERATURE, MAX_TOKENS, DB_PATH",
-                "Requires: pip install python-dotenv",
-            ]),
-            ("🧠 INTELLIGENCE", [
-                "Multi-layer understanding: emotion, distortions, unmet needs",
-                "Learns emotion patterns and adapts over sessions",
-                "Phase-aware responses (intro → rapport → exploration → deep work)",
-                "Crisis detection with immediate helpline resources",
-            ]),
-            ("🎯 THERAPY TOOLS", [
-                "4-7-8 Breathing          → 'breathe'",
-                "5-4-3-2-1 Grounding     → 'ground'",
-                "CBT Thought Record       → 'techniques' → 3",
-            ]),
-            ("📊 TRACKING", [
-                "Wellness score (0-100) based on 7-day patterns",
-                "All data stored locally in SQLite — nothing leaves your machine",
-            ]),
-        ]
-        for title, items in sections:
-            print(f"  {title}")
-            for item in items:
-                print(f"     • {item}")
-            print()
+    if submitted:
+        db.log_mood(mood, emotion, note, energy, sleep)
+        st.session_state.checkin_done_today = True
+
+        streak = db.get_streak()
+        st.balloons()
+        st.success(f"Saved! 🔥 {streak['current']}-day streak")
+
+        # Personalised insight
+        if mood <= 3:
+            st.info("💙 Mood is low today — that's okay. Try one small kind act for yourself.")
+        elif mood >= 8:
+            st.info("✨ You're doing well — what's contributing? Worth noting for reference.")
+        if sleep < 6:
+            st.warning("😴 Under 6 hours of sleep significantly affects mood and anxiety levels.")
+        if energy <= 2:
+            st.info("⚡ Low energy? Even a 5-minute walk outside can shift your state.")
+
+        st.rerun()
+
+
+def render_metric(label, value, delta=""):
+    st.markdown(f"""
+    <div class="metric-tile">
+        <div class="metric-value">{value}</div>
+        <div class="metric-label">{label}</div>
+        {f'<div style="font-size:0.8rem;color:#52c788;margin-top:4px">{delta}</div>' if delta else ''}
+    </div>""", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  MOOD CHART PAGE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def page_chart(db: Database):
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+        PLOTLY = True
+    except ImportError:
+        PLOTLY = False
+
+    st.markdown("## 📊 Mood Chart")
+
+    days = st.select_slider("Time window", [7,14,30], value=14,
+                            format_func=lambda x: f"{x} days")
+    history = db.get_mood_history(days)
+
+    if not history:
+        st.markdown("""
+        <div class="card card-accent" style="text-align:center;padding:40px">
+            <div style="font-size:2rem;margin-bottom:12px">📋</div>
+            <div>No check-in data yet.</div>
+            <div style="color:#8892a4;font-size:0.9rem;margin-top:6px">
+                Do your first daily check-in to see trends here.
+            </div>
+        </div>""", unsafe_allow_html=True)
+        return
+
+    dates   = [r["date"] for r in history]
+    scores  = [r["score"] or 0 for r in history]
+    energies= [r["energy"] or 0 for r in history]
+    sleeps  = [r["sleep"] or 0 for r in history]
+    emotions= [r["emotion"] or "neutral" for r in history]
+
+    # Summary metrics
+    col1,col2,col3,col4 = st.columns(4)
+    with col1: render_metric("Avg Mood",   f"{sum(scores)/len(scores):.1f}/10","")
+    with col2: render_metric("Avg Energy", f"{sum(energies)/len(energies):.1f}/5","")
+    with col3: render_metric("Avg Sleep",  f"{sum(sleeps)/len(sleeps):.1f}h","")
+    with col4:
+        from collections import Counter
+        top_em = Counter(emotions).most_common(1)[0][0].title() if emotions else "—"
+        render_metric("Top Emotion", top_em, "")
+
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+    if PLOTLY:
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                            subplot_titles=("Mood Score", "Energy Level", "Sleep Hours"),
+                            vertical_spacing=0.08)
+        # Mood
+        fig.add_trace(go.Scatter(
+            x=dates, y=scores, mode="lines+markers",
+            line=dict(color="#5b8ff0", width=2.5),
+            marker=dict(size=7, color="#5b8ff0"),
+            fill="tozeroy", fillcolor="rgba(91,143,240,0.08)",
+            name="Mood",
+        ), row=1, col=1)
+        # Energy
+        fig.add_trace(go.Bar(
+            x=dates, y=energies,
+            marker_color="#52c788", opacity=0.8, name="Energy",
+        ), row=2, col=1)
+        # Sleep
+        fig.add_trace(go.Bar(
+            x=dates, y=sleeps,
+            marker_color="#f0b429", opacity=0.8, name="Sleep",
+        ), row=3, col=1)
+        fig.update_layout(
+            height=520, showlegend=False,
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#8892a4", family="DM Sans"),
+            margin=dict(l=0,r=0,t=32,b=0),
+        )
+        for i in range(1,4):
+            fig.update_xaxes(showgrid=False, row=i, col=1)
+            fig.update_yaxes(gridcolor="#2a3347", row=i, col=1)
+        st.plotly_chart(fig, use_container_width=True)
+
+    else:
+        # ASCII fallback
+        st.markdown("**Mood History** (install `plotly` for charts)")
+        for r in history:
+            bar = "█" * (r["score"] or 0) + "░" * (10-(r["score"] or 0))
+            st.text(f"  {r['date'][-5:]}  {r['emotion'][:8]:8s}  [{bar}] {r['score']}/10")
+
+    # Emotion breakdown
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown("#### Emotion breakdown")
+    from collections import Counter
+    em_count = Counter(emotions)
+    cols = st.columns(min(len(em_count), 4))
+    for i,(em,count) in enumerate(em_count.most_common(4)):
+        with cols[i]:
+            pct = int(count/len(emotions)*100)
+            st.markdown(f"""
+            <div class="card" style="text-align:center;padding:14px">
+                <div style="font-size:1.5rem">{_em_emoji(em)}</div>
+                <div style="font-size:0.9rem;margin:4px 0">{em.title()}</div>
+                <div style="font-size:0.75rem;color:#8892a4">{count}× ({pct}%)</div>
+            </div>""", unsafe_allow_html=True)
+
+
+def _em_emoji(em):
+    return {"anxious":"😰","sad":"😢","angry":"😠","overwhelmed":"😓",
+            "exhausted":"😴","confused":"🤔","hopeful":"🙂","happy":"😊"}.get(em,"😐")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  GRATITUDE PAGE
+# ─────────────────────────────────────────────────────────────────────────────
+
+GRATITUDE_PROMPTS = [
+    "Something small that made you smile today",
+    "Someone who made your life easier recently",
+    "A challenge that taught you something valuable",
+    "Something about your body or health you appreciate",
+    "A memory that brings you warmth",
+    "Something in your environment you often overlook",
+    "A personal quality you're glad to have",
+    "A simple pleasure you had recently",
+    "Something that went better than expected",
+]
+
+def page_gratitude(db: Database):
+    st.markdown("## 🙏 Gratitude Practice")
+    st.markdown("Specific gratitude — naming *why* something matters — rewires the brain for positivity within 21 days.")
+
+    tab1, tab2 = st.tabs(["✍️ Add entries", "📚 Past entries"])
+
+    with tab1:
+        prompts = random.sample(GRATITUDE_PROMPTS, 3)
+        entries = []
+        with st.form("gratitude_form"):
+            for i, prompt in enumerate(prompts, 1):
+                val = st.text_input(f"{i}. {prompt}", placeholder="Be specific…",
+                                    key=f"grat_{i}")
+                entries.append(val)
+            submitted = st.form_submit_button("💛 Save gratitudes", use_container_width=True)
+
+        if submitted:
+            saved = [e for e in entries if e.strip()]
+            if saved:
+                db.log_gratitude(saved)
+                st.success(f"✅ {len(saved)} gratitude entries saved!")
+                st.balloons()
+            else:
+                st.warning("Please add at least one entry.")
+
+    with tab2:
+        recent = db.get_gratitude(30)
+        if not recent:
+            st.info("No entries yet — add some above!")
+        else:
+            # Group by date
+            from collections import defaultdict
+            by_date = defaultdict(list)
+            for g in recent:
+                by_date[g["date"]].append(g["entry"])
+            for d in sorted(by_date.keys(), reverse=True)[:14]:
+                st.markdown(f"**{d}**")
+                for entry in by_date[d]:
+                    st.markdown(f"""
+                    <div class="card card-amber" style="margin:4px 0;padding:10px 16px;font-size:0.92rem">
+                        💛 {entry}
+                    </div>""", unsafe_allow_html=True)
+                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  GOALS PAGE
+# ─────────────────────────────────────────────────────────────────────────────
+
+GOAL_CATS = ["Mental health","Relationships","Work / Study","Physical health","Habits","Creativity","Other"]
+
+def page_goals(db: Database):
+    st.markdown("## 🎯 Goals")
+
+    tab1, tab2 = st.tabs(["📋 Active goals", "➕ Add goal"])
+
+    with tab1:
+        active    = db.get_goals(completed=False)
+        completed = db.get_goals(completed=True)
+
+        if not active:
+            st.markdown("""
+            <div class="card" style="text-align:center;padding:32px">
+                <div style="font-size:1.6rem">🎯</div>
+                <div style="margin-top:8px;color:#8892a4">No active goals yet. Add one in the next tab.</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            for g in active:
+                col1, col2, col3 = st.columns([6, 1, 1])
+                with col1:
+                    st.markdown(f"""
+                    <div class="card card-accent" style="padding:12px 16px">
+                        <div style="font-size:0.95rem">{g['title']}</div>
+                        <div style="font-size:0.75rem;color:#8892a4;margin-top:4px">
+                            {g['category']} · added {g['created'][:10]}
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+                with col2:
+                    if st.button("✅", key=f"complete_{g['id']}", help="Mark complete"):
+                        db.complete_goal(g["id"])
+                        st.rerun()
+                with col3:
+                    if st.button("🗑️", key=f"delete_{g['id']}", help="Delete"):
+                        db.delete_goal(g["id"])
+                        st.rerun()
+
+        if completed:
+            st.markdown(f"<div style='margin-top:20px;color:#8892a4;font-size:0.85rem'>"
+                        f"✅ {len(completed)} goal(s) completed</div>", unsafe_allow_html=True)
+            with st.expander("Show completed"):
+                for g in completed[-10:]:
+                    st.markdown(f"""
+                    <div style="color:#52c788;font-size:0.9rem;padding:6px 0;
+                                text-decoration:line-through;opacity:0.7">
+                        ✔ {g['title']} <span style="color:#8892a4">{g['completed_date']}</span>
+                    </div>""", unsafe_allow_html=True)
+
+    with tab2:
+        with st.form("goal_form"):
+            title = st.text_input("Goal",
+                                  placeholder="Be specific: 'Meditate 5 min every morning' not 'meditate more'")
+            category = st.selectbox("Category", GOAL_CATS)
+            submitted = st.form_submit_button("➕ Add goal", use_container_width=True)
+        if submitted and title.strip():
+            db.add_goal(title.strip(), category)
+            st.success(f"✅ Goal added: \"{title}\"")
+            st.rerun()
+        elif submitted:
+            st.warning("Please enter a goal title.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TOOLKIT PAGE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def page_toolkit():
+    st.markdown("## 🧘 Therapy Toolkit")
+    st.markdown("Evidence-based techniques for immediate relief and long-term resilience.")
+
+    techniques = [
+        ("🫁 4-7-8 Breathing",    "Anxiety · Stress · Sleep",    "90 sec",
+         "Activates the parasympathetic nervous system. Inhale 4s · Hold 7s · Exhale 8s. Repeat 3–4 cycles.",
+         "478"),
+        ("📦 Box Breathing",       "Acute stress · Panic",        "2 min",
+         "Used by Navy SEALs to reset under pressure. Inhale 4s · Hold 4s · Exhale 4s · Hold 4s.",
+         "box"),
+        ("🧘 5-4-3-2-1 Grounding","Panic · Overwhelm · Anxiety", "3-5 min",
+         "Anchors you in the present moment. Name 5 things you see, 4 touch, 3 hear, 2 smell, 1 taste.",
+         "54321"),
+        ("📝 CBT Thought Record",  "Negative thoughts · Worry",   "5-10 min",
+         "Challenge distorted thinking by examining evidence for and against automatic thoughts.",
+         "cbt"),
+        ("😴 Progressive Relaxation","Tension · Insomnia · Anxiety","5-10 min",
+         "Systematically tense and release muscle groups from feet to face, releasing stored tension.",
+         "pmr"),
+    ]
+
+    cols = st.columns(2)
+    for i,(name,tags,dur,desc,key) in enumerate(techniques):
+        with cols[i%2]:
+            st.markdown(f"""
+            <div class="card card-accent" style="margin:6px 0;min-height:120px">
+                <div style="font-size:1.05rem;font-weight:500">{name}</div>
+                <div style="margin:6px 0">
+                    <span class="emotion-badge">{tags}</span>
+                    <span class="emotion-badge">{dur}</span>
+                </div>
+                <div style="font-size:0.85rem;color:#8892a4;line-height:1.5">{desc}</div>
+            </div>""", unsafe_allow_html=True)
+            if st.button(f"Start →", key=f"start_{key}", use_container_width=True):
+                st.session_state[f"active_technique"] = key
+                st.rerun()
+
+    # Active technique
+    active = st.session_state.get("active_technique")
+    if active:
+        st.divider()
+        if   active == "478":   render_breathing_guide("4-7-8",[(4,"🔵 Breathe IN"),(7,"⏸ HOLD"),(8,"🟢 Breathe OUT")], 3)
+        elif active == "box":   render_breathing_guide("Box",  [(4,"🔵 IN"),(4,"⏸ HOLD"),(4,"🟢 OUT"),(4,"⏸ HOLD")], 4)
+        elif active == "54321": render_grounding()
+        elif active == "cbt":   render_cbt()
+        elif active == "pmr":   render_pmr()
+        if st.button("✖ Close technique"):
+            del st.session_state["active_technique"]
+            st.rerun()
+
+
+def render_breathing_guide(name, steps, rounds):
+    st.markdown(f"### {name} Breathing")
+    st.info(f"Do {rounds} rounds. Focus only on your breath.")
+    pattern = " → ".join([f"{label} ({secs}s)" for secs,label in steps])
+    st.markdown(f"""
+    <div class="card card-green">
+        <div style="font-size:0.9rem;line-height:2">{pattern}</div>
+        <div style="margin-top:12px;color:#8892a4;font-size:0.85rem">
+            Repeat this {rounds} times. Even one round activates your calm response.
+        </div>
+    </div>""", unsafe_allow_html=True)
+    st.markdown("**Why it works:** Extending the exhale stimulates the vagus nerve, which signals "
+                "your nervous system to shift from 'threat' mode into rest-and-digest mode.")
+
+
+def render_grounding():
+    st.markdown("### 5-4-3-2-1 Grounding")
+    st.info("Anxiety lives in the future. This exercise pulls you back to the present moment.")
+    prompts = [("👁 5 things you SEE","Look around — notice details you usually ignore."),
+               ("✋ 4 things you can TOUCH","Feel textures, temperatures, surfaces."),
+               ("👂 3 things you HEAR","Background sounds, your own breathing."),
+               ("👃 2 things you SMELL","Subtle scents in the air around you."),
+               ("👅 1 thing you TASTE","Whatever's present in your mouth right now.")]
+    for sense,hint in prompts:
+        with st.expander(sense):
+            st.caption(hint)
+            for i in range(int(sense[0])):
+                st.text_input(f"  {i+1}.", key=f"ground_{sense[0]}_{i}", placeholder="…")
+    st.success("✨ You're here. Present. Grounded.")
+
+
+def render_cbt():
+    st.markdown("### CBT Thought Record")
+    st.info("Challenge distorted thinking by examining the actual evidence.")
+    with st.form("cbt_form"):
+        situation = st.text_area("What happened? (situation)", height=70)
+        thought   = st.text_input("Automatic thought that came up")
+        intensity = st.slider("How intense is this feeling? (0-100)", 0, 100, 70)
+        ev_for    = st.text_area("Evidence FOR this thought", height=70)
+        ev_ag     = st.text_area("Evidence AGAINST this thought", height=70)
+        balanced  = st.text_area("More balanced alternative thought", height=70)
+        new_int   = st.slider("New feeling intensity (0-100)", 0, 100, 50)
+        submitted = st.form_submit_button("Save record")
+    if submitted and thought:
+        diff = intensity - new_int
+        if diff > 0:
+            st.success(f"✨ {diff}-point reduction in intensity. That's real progress.")
+        elif diff == 0:
+            st.info("Intensity unchanged — that's okay. Awareness itself is progress.")
+        st.markdown(f"""
+        <div class="card card-green" style="margin-top:12px">
+            <div style="color:#8892a4;font-size:0.8rem;margin-bottom:4px">ORIGINAL THOUGHT [{intensity}%]</div>
+            <div style="text-decoration:line-through;color:#8892a4">{thought}</div>
+            <div style="color:#8892a4;font-size:0.8rem;margin:12px 0 4px">BALANCED THOUGHT [{new_int}%]</div>
+            <div style="color:#e8ecf4">{balanced}</div>
+        </div>""", unsafe_allow_html=True)
+
+
+def render_pmr():
+    st.markdown("### Progressive Muscle Relaxation")
+    st.info("Work through each muscle group — tense for 5s, then fully release for 10s.")
+    groups = ["Feet & toes","Calves","Thighs","Abdomen","Chest","Hands & forearms",
+              "Upper arms","Shoulders","Neck","Face"]
+    for i,group in enumerate(groups):
+        st.markdown(f"""
+        <div class="card" style="padding:10px 16px;margin:4px 0">
+            <span style="color:#5b8ff0;font-weight:500">{i+1}.</span> {group}
+            <span style="color:#8892a4;font-size:0.82rem;float:right">Tense 5s → Release 10s</span>
+        </div>""", unsafe_allow_html=True)
+    st.markdown("**Why it works:** Deliberately tensing muscles makes the subsequent relaxation "
+                "deeper, releasing physical tension your body holds during stress.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PROGRESS PAGE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def page_progress(db: Database):
+    try:
+        import plotly.graph_objects as go
+        PLOTLY = True
+    except ImportError:
+        PLOTLY = False
+
+    st.markdown("## 📈 Progress & Insights")
+
+    streak = db.get_streak()
+    stats7 = db.get_mood_stats(7)
+    stats30= db.get_mood_stats(30)
+
+    # Streak row
+    c1,c2,c3,c4 = st.columns(4)
+    with c1:
+        st.markdown(f"""
+        <div class="metric-tile">
+            <div class="streak-number">{streak['current']}</div>
+            <div class="metric-label">Day streak 🔥</div>
+        </div>""", unsafe_allow_html=True)
+    with c2: render_metric("Best streak",   str(streak["longest"]), "")
+    with c3: render_metric("Total days",    str(streak["total"]),   "")
+    with c4: render_metric("Avg mood (7d)", f"{stats7['avg_score']}/10","")
+
+    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+
+    # Goals summary
+    active    = len(db.get_goals(completed=False))
+    completed = len(db.get_goals(completed=True))
+    total_g   = active + completed
+    c1,c2,c3 = st.columns(3)
+    with c1: render_metric("Goals set",       str(total_g),   "")
+    with c2: render_metric("Goals completed", str(completed), "")
+    with c3:
+        pct = int(completed/total_g*100) if total_g else 0
+        render_metric("Completion rate", f"{pct}%", "")
+
+    # Gratitude count
+    grats = db.get_gratitude(30)
+    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+    c1,c2 = st.columns(2)
+    with c1: render_metric("Gratitudes (30d)", str(len(grats)), "")
+    with c2: render_metric("Avg mood (30d)",   f"{stats30['avg_score']}/10", "")
+
+    # Wellness score
+    st.divider()
+    st.markdown("#### Wellness Score")
+    mood30  = stats30["avg_score"]
+    s_score = int(min(100, max(0,
+        (mood30/10)*40 +
+        (min(streak["current"],30)/30)*30 +
+        (min(len(grats),30)/30)*20 +
+        (min(completed,10)/10)*10
+    )))
+    label = ("🌟 Thriving"   if s_score>=80 else
+             "✅ Doing well" if s_score>=65 else
+             "💛 Managing"   if s_score>=50 else
+             "💙 Keep going" if s_score>=30 else
+             "🙏 Needs care")
+    st.markdown(f"""
+    <div class="card card-accent">
+        <div style="display:flex;align-items:center;gap:20px">
+            <div>
+                <div style="font-family:'DM Serif Display',serif;font-size:3rem;
+                            color:#5b8ff0;line-height:1">{s_score}</div>
+                <div style="color:#8892a4;font-size:0.78rem;text-transform:uppercase;
+                            letter-spacing:0.08em">out of 100</div>
+            </div>
+            <div>
+                <div style="font-size:1.2rem;font-weight:500">{label}</div>
+                <div style="color:#8892a4;font-size:0.85rem;margin-top:6px;max-width:380px">
+                    Weighted from mood average, streak, gratitude practice, and goal completion.
+                </div>
+            </div>
+        </div>
+        <div class="mood-bar-wrap" style="margin-top:16px">
+            <div class="mood-bar-fill" style="width:{s_score}%"></div>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    if PLOTLY and stats30["count"] > 0:
+        history = db.get_mood_history(30)
+        if history:
+            from collections import Counter
+            emotions = [r["emotion"] for r in history if r.get("emotion")]
+            em_count = Counter(emotions)
+            fig = go.Figure(go.Bar(
+                x=list(em_count.keys()),
+                y=list(em_count.values()),
+                marker_color=["#5b8ff0","#52c788","#f0b429","#e05b5b",
+                              "#a78bfa","#38bdf8","#fb923c"][:len(em_count)],
+                text=list(em_count.values()),
+                textposition="auto",
+            ))
+            fig.update_layout(
+                title="Emotions over last 30 days",
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#8892a4", family="DM Sans"),
+                height=260,
+                margin=dict(l=0,r=0,t=36,b=0),
+                xaxis=dict(showgrid=False),
+                yaxis=dict(gridcolor="#2a3347"),
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ENTRY POINT
+#  MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def main():
+    inject_css()
+    init_state()
+    db = get_db()
+    render_sidebar(db)
+
+    page = st.session_state.page
+
+    if   page == "Chat":     page_chat(db)
+    elif page == "Checkin":  page_checkin(db)
+    elif page == "Chart":    page_chart(db)
+    elif page == "Gratitude":page_gratitude(db)
+    elif page == "Goals":    page_goals(db)
+    elif page == "Toolkit":  page_toolkit()
+    elif page == "Progress": page_progress(db)
+
 
 if __name__ == "__main__":
-    try:
-        MindfulPro().interactive()
-    except KeyboardInterrupt:
-        print("\n\n  💙  Take care of yourself!\n")
-    except Exception as e:
-        print(f"\n  ❌  Critical error: {e}")
-        print("      Please restart the application.\n")
+    main()
